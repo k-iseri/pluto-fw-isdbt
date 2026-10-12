@@ -36,17 +36,20 @@ ISDB-T フルセグ受信（ホスト側: BonDriver_PlutoSDR / isdbtd）の USB 
 | util_cpack2 | `SAMPLE_DATA_WIDTH` パラメータあり（既定 16）。8 の指定は構文上可能 | analogdevicesinc/hdl `library/util_pack/util_cpack2/util_cpack2.v` を確認（2026-10-12） |
 | 8bit 量子化の受信品質 | ホスト側 ref/ の ci8（8bit I/Q）end-to-end ループバックテストは通過済み。実波 8bit 録音の復調実績もあり | isdbt-sdr のテストと録音（2026-10-10） |
 
-### VERIFY（未確認。実装前に潰す）
+### VERIFY の結果（2026-10-12 調査。残件は状態列が「残」のもの）
 
-| # | 項目 | 確認方法 |
-|---|---|---|
-| V1 | pluto プロジェクトの BD（system_bd.tcl）の正確な RX データパス（axi_ad9361 → util_cpack2 → axi_dmac という標準構成か、ビット幅の受け渡し） | hdl フォークの projects/pluto を読む |
-| V2 | `util_cpack2_impl` が SAMPLE_DATA_WIDTH=8 で正しく動くか（内部実装の制約） | ソース読解 + シミュレーション |
-| V3 | `iio_device_reg_read()` が **usb: バックエンド（iiod 経由）で** debug レジスタを読めるか | 純正 fw の実機で `iio_attr -D` / API から ADI コアの既知レジスタ（バージョンレジスタ 0x0000）を読んでみる。**ファーム改修前に確認可能** |
-| V4 | iiod に追加の context attribute を持たせる機構（/etc/libiio.ini ?）の有無 | plutosdr-fw の rootfs 構成を読む。無ければ識別はカウンタレジスタのマジック値で代替（V3 が通れば必須ではない） |
-| V5 | ad9361_conv.c の channel マクロの正確な形（realbits=12 / storagebits=16 / shift の値） | linux フォークの該当ファイルを読む |
-| V6 | TX 経路（util_upack2 + TX 側 axi_dmac + cf-ad9361-dds-core-lpc ノード）を BD と devicetree から外したとき、ad9361-phy ドライバの初期化・キャリブレーションが TX DMA 無しで通るか（phy の TX LO/ENSM は残る） | まず devicetree からの DDS ノード削除だけで起動確認 → 次に BD から削除 |
-| V7 | クローン機固有の差（DDR 容量・配線）が純正 pluto プロジェクトと同一か | 現に純正 fw v0.39 が動いているので同一と推定。自ビルドの無改修 fw で起動確認（検証計画の段階 0） |
+| # | 項目 | 状態 | 結果 / 残作業 |
+|---|---|---|---|
+| V1 | pluto BD の RX データパス | **ほぼ確認** | `axi_ad9361 → (I0/Q0 は rx_fir_decimator 経由) → util_cpack2（4ch: I0,Q0,I1,Q1、幅パラメータは BD 未指定=既定16）→ axi_dmac（DMA_DATA_WIDTH_SRC=64）`。axi_ad9361 は 0x79020000。TX は `dac_dma(CYCLIC) → tx_upack → tx_fir_interpolator → axi_ad9361/dac_data`。残: v0.39 がピンする hdl コミットでの再確認と、axi_ad9361 のアドレス割当幅（interconnect 上の range） |
+| V2 | util_cpack2 の 8bit | **ほぼ確認** | `util_cpack2_impl` は全幅が SAMPLE_DATA_WIDTH から導出され 16 決め打ちなし（keep も 8 の倍数条件を満たす）。残: 下位の `pack_shell` / `ad_perfect_shuffle` の確認とシミュレーション |
+| V3 | usb: 経由のレジスタ直読み | **実機確認済み** | 純正 fw v0.39 + libiio v1 Python で `cf-ad9361-lpc` に debug 属性 `direct_reg_access` あり。`reg_read(0x80000000\|offset)` で PCORE レジスタが読めた（0x0000 → 0x000A0300 = axi_ad9361 v10.3。MAGIC なしは AD9361 SPI 側へフォワードされるのも確認） |
+| V4 | 追加 context attribute 機構 | 残 | V3 が通ったので優先度低（識別はカウンタブロックのマジックレジスタで足りる）。フォーク後に rootfs を見る |
+| V5 | scan_type の定義箇所 | **確認済み** | `ad9361_conv.c` の `axiadc_chip_info_tbl[ID_AD9361]`、`AIM_CHAN(_, _, 12, 'S')`。**マクロが storagebits=16 / shift=0 をハードコード**しており、実行時変更の機構は無し。パッチは「storagebits を引数化したマクロ変種を足して ID_AD9361 のみ 8/8 化」が最小 |
+| V6 | TX 削除の安全性 | **一部確認** | devicetree 確認: `cf-ad9361-lpc` reg = 0x79020000 **size 0x6000**、`cf-ad9361-dds-core-lpc` reg = **0x79024000 size 0x1000（lpc と同一 AXI 窓の内側！）**= DAC レジスタは独立コアではなく axi_ad9361 コア内蔵（+0x4000）。よって BD から消すのは tx_upack / dac_dma / tx_fir_interpolator で、axi_ad9361 の DAC レジスタ自体は残る → phy 初期化が壊れるリスクは当初想定より低い。残: dts から dds ノードを外した起動確認（検証計画 段階 1） |
+| V7 | クローン機の個体差 | 残 | 段階 0（無改修リビルドの起動確認）で検出 |
+
+注: V1/V2/V5/V6 のソース確認は上流 **main ブランチ**で行った（2026-10-12）。フォーク作成時に
+v0.39 がピンするコミットで差分がないか再確認する。
 
 ## 3. 改修内容
 
@@ -61,8 +64,10 @@ ISDB-T フルセグ受信（ホスト側: BonDriver_PlutoSDR / isdbtd）の USB 
 
 ### 3.2 8bit パッキング
 
-**データフロー**: axi_ad9361 の RX 出力（I/Q 各 16bit コンテナ、実 12bit）を
-新規モジュール `rtl/pack8.v`（MIT）で 8bit へ量子化してから cpack → DMA に渡す。
+**データフロー**: axi_ad9361 の RX 出力（I/Q 各 16bit コンテナ、実 12bit。I0/Q0 は
+rx_fir_decimator 経由 — V1 確認済み）を新規モジュール `rtl/pack8.v`（MIT）で 8bit へ
+量子化し、cpack（`SAMPLE_DATA_WIDTH=8` に変更）→ DMA に渡す。pack8 の挿入点は
+decimator 出力/axi_ad9361 出力と cpack の 4 入力レーンの間。
 
 - 量子化: 12bit [11:0] → 8bit。**算術右シフト 4 + 丸め（round-half-away-from-zero）+
   飽和**。単純切り捨てより ~0.5 LSB のバイアスを避ける。
@@ -78,9 +83,11 @@ ISDB-T フルセグ受信（ホスト側: BonDriver_PlutoSDR / isdbtd）の USB 
 
 **カーネル側の申告（ホスト自動適応の要）**:
 
-- `ad9361_conv.c` の chip_info の scan_type を realbits=8 / storagebits=8 / shift=0 に
-  変更するパッチ（GPL-2.0）。→ iiod / libiio の `iio_device_get_sample_size()` が
-  2ch 有効時に **2 バイト**を返し、ホストは申告ベースで自動適応できる。
+- `ad9361_conv.c` の `AIM_CHAN` マクロは storagebits=16 をハードコード（V5 確認済み）。
+  storagebits を引数化したマクロ変種を追加し、`axiadc_chip_info_tbl[ID_AD9361]` の
+  4 チャネルだけ realbits=8 / storagebits=8 / shift=0 にするパッチ（GPL-2.0）。
+  → iiod / libiio の `iio_device_get_sample_size()` が 2ch 有効時に **2 バイト**を返し、
+  ホストは申告ベースで自動適応できる。
 - 方式 B（将来）: user_logic チャネルと同様に `ADI_REG_CHAN_USR_CNTRL_1` 相当から
   実行時取得にすれば「FPGA が正、カーネルは読むだけ」になり devicetree 分岐も消える。
   v1 では見送り（パッチが大きくなる）。V5 の確認時に工数を再評価。
@@ -108,12 +115,18 @@ ISDB-T フルセグ受信（ホスト側: BonDriver_PlutoSDR / isdbtd）の USB 
   | 0x08 / 0x0C | サンプルカウンタ下位 / 上位（読み出しは下位アクセスで上位をラッチ） |
   | 0x10 | overflow イベント数 |
 
-- 読み出し経路: cf_axi_adc の debugfs_reg_access は自コアのレジスタ向けなので、
-  独立ブロックは **generic-uio または syscon 経由の sysfs 属性**か、
-  cf_axi_adc のコアレジスタ空間の未使用領域に同居させて reg_read で読むかを
-  V1/V3 の結果で決める。ホストから `iio_device_reg_read()` 一発で読めるのが理想
-  （BonDriver の status 取得周期 10 s に同期して読み、受信済みサンプル総数との差分 =
-  確定ドロップ数として `rx_dropped_hw` を status JSON に追加）。
+- 読み出し経路（V3 実機確認を踏まえた設計）: cf_axi_adc の debugfs_reg_access は
+  「devicetree の reg 窓を ioremap した領域 + (reg & 0xFFFF)」を読むので、
+  **カウンタブロックを cf-ad9361-lpc の 64KB 以内の空きオフセットに置き、
+  dts の reg サイズを広げれば、カーネル改変ゼロ（dts のみ）で `iio_device_reg_read()`
+  から読める**。現状の窓は 0x79020000 size 0x6000 で、+0x4000〜0x4FFF は
+  axi_ad9361 内蔵の DAC レジスタ（V6 確認）。カウンタブロックは interconnect の
+  割当粒度を見て +0x8000（axi_ad9361 の割当 range が 0x8000 以下の場合）等に置き、
+  dts reg を size 0x9000 以上へ拡張する。割当 range が 64KB 固定で同居不能なら、
+  代替として専用の小さな platform driver + sysfs 属性（GPL-2.0 パッチ増）に切替。
+  ホストは `iio_device_reg_read()` を BonDriver の status 取得周期（10 s）に同期して
+  読み、受信済みサンプル総数との差分 = 確定ドロップ数として `rx_dropped_hw` を
+  status JSON に追加。
 - これが入ると、ホスト側 RateMonitor（実測レートによる推測検出）は「ハード検出の
   クロスチェック」に役割が変わる（削除はしない。純正 fw でも動く検出として残す）。
 
