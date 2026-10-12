@@ -30,6 +30,7 @@ ISDB-T フルセグ受信（ホスト側: BonDriver_PlutoSDR / isdbtd）の USB 
 |---|---|---|
 | ベース | plutosdr-fw **v0.39**（実機の現行 fw と同版。commit 9e90bce） | GitHub release ページ |
 | ツール | **Vivado 2023.2**、Linux kernel 6.1 系（ADI ブランチ）、libiio v0.26（デバイス側） | v0.39 release notes |
+| v0.39 の submodule ピン | hdl `065c8f18` / linux `f3da30df` / buildroot `e783aadc` / u-boot-xlnx `90401ce9`。**linux ピンは実機カーネル文字列 `6.1.0-...-gf3da30df6004` と一致**（実機は素の v0.39 と確定） | GitHub API + 実機 iio context（2026-10-12） |
 | scan_type の出所 | cf-ad9361-lpc（cf_axi_adc ドライバ）の物理チャネルの scan_type（realbits/storagebits/shift）は **devicetree ではなくコンバータドライバの chip_info** から来る（`axiadc_channel_setup()` が `conv->chip_info->channel` をコピー）。AD9361 の場合の定義場所は `ad9361_conv.c` の channel マクロ | analogdevicesinc/linux `drivers/iio/adc/cf_axi_adc_core.c` を確認（2026-10-12） |
 | 実行時 datatype 機構 | 同ドライバの user_logic チャネルは `ADI_REG_CHAN_USR_CNTRL_1` レジスタから sign/realbits/storagebits/shift を**実行時に読む**仕組みがある | 同上 |
 | レジスタ直読み | cf_axi_adc は `debugfs_reg_access` を実装済み。`DEBUGFS_DRA_PCORE_REG_MAGIC` 付きアドレスで AXI コアレジスタを直接読み書きできる → libiio の `iio_device_reg_read()` が使える見込み | 同上 |
@@ -40,13 +41,14 @@ ISDB-T フルセグ受信（ホスト側: BonDriver_PlutoSDR / isdbtd）の USB 
 
 | # | 項目 | 状態 | 結果 / 残作業 |
 |---|---|---|---|
-| V1 | pluto BD の RX データパス | **ほぼ確認** | `axi_ad9361 → (I0/Q0 は rx_fir_decimator 経由) → util_cpack2（4ch: I0,Q0,I1,Q1、幅パラメータは BD 未指定=既定16）→ axi_dmac（DMA_DATA_WIDTH_SRC=64）`。axi_ad9361 は 0x79020000。TX は `dac_dma(CYCLIC) → tx_upack → tx_fir_interpolator → axi_ad9361/dac_data`。残: v0.39 がピンする hdl コミットでの再確認と、axi_ad9361 のアドレス割当幅（interconnect 上の range） |
+| V1 | pluto BD の RX データパス | **確認済み（v0.39 ピン hdl `065c8f18` で照合）** | `axi_ad9361 → (I0/Q0 は rx_fir_decimator 経由) → util_cpack2（4ch、幅パラメータは BD 未指定=既定16）→ axi_dmac（DMA_DATA_WIDTH_SRC=64、HP1）`。axi_ad9361 は 0x79020000（次の割当は 0x7C400000 なので後方は空き）。**`cpack/fifo_wr_overflow → axi_ad9361/adc_dovf` の接続が既にあり**、overflow はコアに報告されている（→ V8）。TX は `dac_dma(CYCLIC, HP2) → tx_upack → tx_fir_interpolator(x8) → axi_ad9361/dac_data` + **axi_tdd_0（v0.39 で追加）**。TDD は tdd_channel_1 が ADC DMA の sync も駆動しているので、削除時は sync の後始末が要る。残: axi_ad9361 の interconnect 割当幅（Vivado アドレスエディタで確認） |
 | V2 | util_cpack2 の 8bit | **ほぼ確認** | `util_cpack2_impl` は全幅が SAMPLE_DATA_WIDTH から導出され 16 決め打ちなし（keep も 8 の倍数条件を満たす）。残: 下位の `pack_shell` / `ad_perfect_shuffle` の確認とシミュレーション |
 | V3 | usb: 経由のレジスタ直読み | **実機確認済み** | 純正 fw v0.39 + libiio v1 Python で `cf-ad9361-lpc` に debug 属性 `direct_reg_access` あり。`reg_read(0x80000000\|offset)` で PCORE レジスタが読めた（0x0000 → 0x000A0300 = axi_ad9361 v10.3。MAGIC なしは AD9361 SPI 側へフォワードされるのも確認） |
 | V4 | 追加 context attribute 機構 | 残 | V3 が通ったので優先度低（識別はカウンタブロックのマジックレジスタで足りる）。フォーク後に rootfs を見る |
-| V5 | scan_type の定義箇所 | **確認済み** | `ad9361_conv.c` の `axiadc_chip_info_tbl[ID_AD9361]`、`AIM_CHAN(_, _, 12, 'S')`。**マクロが storagebits=16 / shift=0 をハードコード**しており、実行時変更の機構は無し。パッチは「storagebits を引数化したマクロ変種を足して ID_AD9361 のみ 8/8 化」が最小 |
+| V5 | scan_type の定義箇所 | **確認済み（v0.39 ピン linux `f3da30df` で照合）** | `ad9361_conv.c` の `axiadc_chip_info_tbl`、`AIM_CHAN(_, _, 12, 'S')`。**マクロが storagebits=16 / shift=0 をハードコード**、実行時変更の機構は無し。**プロファイル選択は `ad9361_uses_rx2tx2(phy) ? ID_AD9361 : ID_AD9364` で、1R1T の Pluto は ID_AD9364（2ch）が選ばれる**（dtsi のラベルも cf_ad9364_adc_core_0）。パッチは storagebits を引数化したマクロ変種を足して **ID_AD9364（+保険で ID_AD9361）** を 8/8 化 |
 | V6 | TX 削除の安全性 | **一部確認** | devicetree 確認: `cf-ad9361-lpc` reg = 0x79020000 **size 0x6000**、`cf-ad9361-dds-core-lpc` reg = **0x79024000 size 0x1000（lpc と同一 AXI 窓の内側！）**= DAC レジスタは独立コアではなく axi_ad9361 コア内蔵（+0x4000）。よって BD から消すのは tx_upack / dac_dma / tx_fir_interpolator で、axi_ad9361 の DAC レジスタ自体は残る → phy 初期化が壊れるリスクは当初想定より低い。残: dts から dds ノードを外した起動確認（検証計画 段階 1） |
 | V7 | クローン機の個体差 | 残 | 段階 0（無改修リビルドの起動確認）で検出 |
+| V8 | axi_ad9361 の overflow ステータス | **実機で大部分確認** | regmap: **UI_STATUS = バイト 0x0088、bit2 = UI_OVF（RW1C）**（adi_regmap_adc、v0.39 ピン hdl で確認）。実機（純正 fw、アイドル中）で read/write とも成功: UI_OVF は常時 1（取り込み停止中は消費者がいないので overflow し続ける = 正常）、W1C 直後も再セットされる。SCRATCH（バイト 0x0008）で write 経路の健全性も確認済み。**運用設計: ストリーム開始後にクリアし、取り込み中に定期読み。取り込み中に立つ = ドロップ発生**。残: 実ストリーミング中の挙動確認（健全時に立たないこと。検証計画 段階 0 に追加）。成立すればカスタム RTL は 64bit サンプルカウンタのみに縮む |
 
 注: V1/V2/V5/V6 のソース確認は上流 **main ブランチ**で行った（2026-10-12）。フォーク作成時に
 v0.39 がピンするコミットで差分がないか再確認する。
@@ -84,8 +86,9 @@ decimator 出力/axi_ad9361 出力と cpack の 4 入力レーンの間。
 **カーネル側の申告（ホスト自動適応の要）**:
 
 - `ad9361_conv.c` の `AIM_CHAN` マクロは storagebits=16 をハードコード（V5 確認済み）。
-  storagebits を引数化したマクロ変種を追加し、`axiadc_chip_info_tbl[ID_AD9361]` の
-  4 チャネルだけ realbits=8 / storagebits=8 / shift=0 にするパッチ（GPL-2.0）。
+  storagebits を引数化したマクロ変種を追加し、`axiadc_chip_info_tbl` の
+  **ID_AD9364（1R1T の Pluto で実際に選ばれるプロファイル）と ID_AD9361** を
+  realbits=8 / storagebits=8 / shift=0 にするパッチ（GPL-2.0）。
   → iiod / libiio の `iio_device_get_sample_size()` が 2ch 有効時に **2 バイト**を返し、
   ホストは申告ベースで自動適応できる。
 - 方式 B（将来）: user_logic チャネルと同様に `ADI_REG_CHAN_USR_CNTRL_1` 相当から
@@ -101,9 +104,14 @@ decimator 出力/axi_ad9361 出力と cpack の 4 入力レーンの間。
 
 ### 3.3 ドロップ検出カウンタ
 
-- `rtl/sample_counter.v`（MIT）: ADC サンプルクロックで動く **64bit フリーランニング
-  サンプルカウンタ** + **DMA 受け入れ不能（overflow）イベントのカウンタ/ラッチ**を
-  AXI-Lite の小さな独立レジスタブロックとして追加。
+- overflow の検出自体は**コア既存の UI_STATUS（バイト 0x0088、bit2 UI_OVF、RW1C）で
+  足りる見込み**（V8 実機確認済み。アイドル中は常時 1 が正常で、ストリーム開始後に
+  クリアして取り込み中に監視する運用）。純正ファームでも使えるので、ホスト側は
+  先行して UI_OVF 監視を実装できる。
+- `rtl/sample_counter.v`（MIT）: ドロップの**定量化**（何サンプル欠けたか）のために、
+  ADC サンプルクロックで動く **64bit フリーランニングサンプルカウンタ**を
+  AXI-Lite の小さな独立レジスタブロックとして追加（overflow ラッチは UI_OVF があるので
+  v1 では持たない）。
   独立ブロックにする理由: 上流（axi_ad9361 コア）への改変を避け、MIT のまま置けて、
   レジスタマップの衝突もない。
 - レジスタマップ（案）:
@@ -166,7 +174,7 @@ linux パッチ = GPL-2.0 / hdl 改変 = ADI デュアル。
 
 | 段階 | 内容 | 合格基準 |
 |---|---|---|
-| 0 | **V3 の事前確認**（純正 fw のまま reg_read が usb: で通るか）+ 無改修の v0.39 を自前フルビルドして実機起動 | iio_info / 受信が純正配布版と同等 |
+| 0 | ~~V3 の事前確認~~（済: reg read/write とも usb: で動作確認）+ **UI_OVF のストリーミング中挙動確認**（健全時 0・飽和時 1。純正 fw で可能）+ 無改修の v0.39 を自前フルビルドして実機起動 | iio_info / 受信が純正配布版と同等、UI_OVF がドロップ指標として使える |
 | 1 | RX 専用化のみ | 従来ホスト（16bit、7/8 レート）で TVTest 視聴が無劣化 |
 | 2 | + サンプルカウンタ | reg_read でカウンタ読み出し、1 時間で (カウンタ増分) = (受信サンプル数) ± 0 |
 | 3 | + 8bit パッキング（ホスト側 s8 対応と同時） | 公称 8.127 MSPS で rx_slow=0・ハードドロップ 0・TVTest 視聴、MER が 16bit 比 −0.5 dB 以内 |

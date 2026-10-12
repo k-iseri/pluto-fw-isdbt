@@ -21,9 +21,11 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="cf-ad9361-lpc PCORE register read check")
     ap.add_argument("--uri", default="usb:")
     ap.add_argument("--offset", type=lambda s: int(s, 0), action="append",
-                    help="読むオフセット（複数可）。省略時は 0x0000(version)/0x0004/0x000C(scratch)")
+                    help="読むオフセット（複数可）。省略時は 0x0000(VERSION)/0x0008(SCRATCH)/"
+                         "0x000C(CONFIG)/0x0088(UI_STATUS: bit2=UI_OVF, RW1C。"
+                         "アイドル中は常時 1 が正常 — 消費者がいない間は overflow し続ける)")
     args = ap.parse_args()
-    offsets = args.offset or [0x0000, 0x0004, 0x000C]
+    offsets = args.offset or [0x0000, 0x0008, 0x000C, 0x0088]
 
     ctx = iio.Context(args.uri)
     print("context:", ctx.description)
