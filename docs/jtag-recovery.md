@@ -13,12 +13,24 @@ FSBL の DDR 初期化がこの個体と合わずブート最初期でハング(
 - `plutosdr-fw/build/pluto.dfu`(WSL 側)— 自ビルド v0.39(ベンダー u-boot で起動実績あり)
 - 基板の JTAG 穴: `3.3V TMS TCK TDO TDI GND`(シルク順)
 
+## 追加判明事項(2026-10-12)
+
+- 基板裏に **`short JTAG / open QSPI`** のブートモードパッドあり。ショートして電源投入すると
+  BootROM が JTAG 待ちで停止する(壊れた FSBL を読まない)→ **復旧時はショート推奨**
+- 基板左側に **UART 用 USB コネクタ(CH340、1a86:7523)**あり。usbipd で WSL へ渡すと
+  /dev/ttyUSB0(115200)。FSBL(リリースビルド)は無出力なので沈黙 = u-boot 未到達の意味
+- OpenOCD + FT232H でも復旧可能(Vivado プローブ不要)。`scripts/ft232h-zynq.cfg` と
+  `scripts/recover_nano_openocd.sh` を使う。Ubuntu の openocd 0.11 の zynq_7000.cfg は
+  7z010(PL TAP id 0x13722093)対応・ターゲット名 `zynq.cpu0`
+
 ## ハードウェア
 
-1. 1×6 ピンヘッダをはんだ付け(斜め挿しテンションでも短時間なら可)
-2. Platform Cable USB II 互換(または Digilent HS2 等)を 1:1 で配線
-   (VREF→3.3V、GND→GND、TMS/TCK/TDO/TDI はラベルどおり)
-3. ボードは USB で PC に接続して給電しておく(ハング状態のままで OK)
+- 経路 A(FT232H + OpenOCD): `scripts/ft232h-zynq.cfg` の配線表どおり
+  (AD0→TCK、AD1→TDI、AD2→TDO、AD3→TMS、GND→GND。**3.3V は繋がない**)
+- 経路 B(Vivado 直結プローブ): Platform Cable USB II 互換等を 1:1 で配線
+  (VREF→3.3V、GND→GND、TMS/TCK/TDO/TDI はラベルどおり)
+- いずれも 1×6 ピンヘッダをはんだ付け(斜め挿しテンションでも短時間なら可)
+- ボードは SLAVE 側 USB で給電(「short JTAG」パッドをショートして挿す)
 
 ## 手順
 
