@@ -14,5 +14,8 @@ build/
 vivado*.backup.jou
 vivado*.backup.log
 
+# 復旧用イメージ（純正リリース zip と自ビルド frm の退避場所）
+recovery/
+
 # エディタ
 .vscode/

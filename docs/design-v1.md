@@ -183,7 +183,7 @@ linux パッチ = GPL-2.0 / hdl 改変 = ADI デュアル。
 
 | 段階 | 内容 | 合格基準 |
 |---|---|---|
-| 0 | ~~V3 の事前確認~~（済: reg read/write とも usb: で動作確認）+ **UI_OVF のストリーミング中挙動確認**（健全時 0・飽和時 1。純正 fw で可能）+ 無改修の v0.39 を自前フルビルドして実機起動 | iio_info / 受信が純正配布版と同等、UI_OVF がドロップ指標として使える |
+| 0 | ~~V3 の事前確認~~（済: reg read/write とも usb: で動作確認）+ ~~UI_OVF のストリーミング中挙動確認~~（済: 健全時 0・飽和時 t=12.1s に 1。ホスト側 isdbt-sdr に hw_ovf 監視として実装済み）+ 無改修の v0.39 を自前ビルドして実機起動。**ビルドは Vivado 無しで完了済み**（2026-10-12、WSL。Makefile の XSA フォールバック = 公式リリースの system_top.xsa を使用。成果物 build/pluto.frm 12MB、スタンプ v0.39-1-g8d2a。FSBL/boot.frm は Vivado 導入後）。**実機書き込み・起動確認が残**。ビルドのハマり: WSL の Windows PATH 継承は `env PATH=...` でクリーン化が必要、カーネル gcc-plugins に libgmp-dev / libmpc-dev が必要、shallow clone は describe がタグに届かないので plutosdr-fw は depth 2 + タグ fetch | iio_info / 受信が純正配布版と同等、UI_OVF がドロップ指標として使える（済） |
 | 1 | RX 専用化のみ | 従来ホスト（16bit、7/8 レート）で TVTest 視聴が無劣化 |
 | 2 | + サンプルカウンタ | reg_read でカウンタ読み出し、1 時間で (カウンタ増分) = (受信サンプル数) ± 0 |
 | 3 | + 8bit パッキング（ホスト側 s8 対応と同時） | 公称 8.127 MSPS で rx_slow=0・ハードドロップ 0・TVTest 視聴、MER が 16bit 比 −0.5 dB 以内 |
