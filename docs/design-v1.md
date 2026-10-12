@@ -48,7 +48,7 @@ ISDB-T フルセグ受信（ホスト側: BonDriver_PlutoSDR / isdbtd）の USB 
 | V5 | scan_type の定義箇所 | **確認済み（v0.39 ピン linux `f3da30df` で照合）** | `ad9361_conv.c` の `axiadc_chip_info_tbl`、`AIM_CHAN(_, _, 12, 'S')`。**マクロが storagebits=16 / shift=0 をハードコード**、実行時変更の機構は無し。**プロファイル選択は `ad9361_uses_rx2tx2(phy) ? ID_AD9361 : ID_AD9364` で、1R1T の Pluto は ID_AD9364（2ch）が選ばれる**（dtsi のラベルも cf_ad9364_adc_core_0）。パッチは storagebits を引数化したマクロ変種を足して **ID_AD9364（+保険で ID_AD9361）** を 8/8 化 |
 | V6 | TX 削除の安全性 | **一部確認** | devicetree 確認: `cf-ad9361-lpc` reg = 0x79020000 **size 0x6000**、`cf-ad9361-dds-core-lpc` reg = **0x79024000 size 0x1000（lpc と同一 AXI 窓の内側！）**= DAC レジスタは独立コアではなく axi_ad9361 コア内蔵（+0x4000）。よって BD から消すのは tx_upack / dac_dma / tx_fir_interpolator で、axi_ad9361 の DAC レジスタ自体は残る → phy 初期化が壊れるリスクは当初想定より低い。残: dts から dds ノードを外した起動確認（検証計画 段階 1） |
 | V7 | クローン機の個体差 | 残 | 段階 0（無改修リビルドの起動確認）で検出 |
-| V8 | axi_ad9361 の overflow ステータス | **実機で大部分確認** | regmap: **UI_STATUS = バイト 0x0088、bit2 = UI_OVF（RW1C）**（adi_regmap_adc、v0.39 ピン hdl で確認）。実機（純正 fw、アイドル中）で read/write とも成功: UI_OVF は常時 1（取り込み停止中は消費者がいないので overflow し続ける = 正常）、W1C 直後も再セットされる。SCRATCH（バイト 0x0008）で write 経路の健全性も確認済み。**運用設計: ストリーム開始後にクリアし、取り込み中に定期読み。取り込み中に立つ = ドロップ発生**。残: 実ストリーミング中の挙動確認（健全時に立たないこと。検証計画 段階 0 に追加）。成立すればカスタム RTL は 64bit サンプルカウンタのみに縮む |
+| V8 | axi_ad9361 の overflow ステータス | **実機確認完了（2026-10-12）** | regmap: **UI_STATUS = バイト 0x0088、bit2 = UI_OVF（RW1C）**（adi_regmap_adc、v0.39 ピン hdl で確認）。実機（純正 fw）で read/write 成功（SCRATCH=0x0008 で write 経路も検証。0x000C は RO の CONFIG）。アイドル中は常時 1 = 正常（消費者不在の overflow）。**ストリーミング実測: 健全レート 7,111,111 Hz で 15 秒間 OVF=0 を維持（消費 7.114 MSPS）、飽和条件（16bit × 公称 8,126,984 Hz）では t=12.1 s で OVF=1（消費実測 7.973 MSPS < 公称 = ドロップと整合）**。→ UI_OVF は取り込み中のドロップ指標としてそのまま使える（純正 fw でも可）。カスタム RTL は 64bit サンプルカウンタのみ |
 
 注: V1/V2/V5/V6 のソース確認は上流 **main ブランチ**で行った（2026-10-12）。フォーク作成時に
 v0.39 がピンするコミットで差分がないか再確認する。
@@ -65,6 +65,15 @@ v0.39 がピンするコミットで差分がないか再確認する。
   （将来の v2 とサンプルカウンタのための余地）。
 
 ### 3.2 8bit パッキング
+
+**先行事例（tezuka_fw）**: F5OEO の [tezuka_fw](https://github.com/F5OEO/tezuka_fw)（**GPL-3.0**）に
+complex 8bit モードがあり、ホスト側 isdbt-sdr は当初これを使う判断だった
+（isdbt-sdr の `hw/pluto/fw-8bit.md`。ボード到着前の判断で、本リポジトリが上書きする）。
+tezuka の方式は「voltage1 を無効化すると voltage0 の 16bit 枠に (i8,q8) を詰める」で、
+scan_type の申告は 16bit のまま = **自己記述的でない**（ホストがモードを知っている必要がある）。
+本設計は scan-element 申告を 8bit にする点が本質的に異なる。
+**GPL-3.0 のため tezuka_fw のコードは本リポジトリ（MIT の rtl/ もカーネルパッチ=GPL-2.0 も）へ
+複製不可**。読んで照合するのは可（その場合は出典を記録する）。
 
 **データフロー**: axi_ad9361 の RX 出力（I/Q 各 16bit コンテナ、実 12bit。I0/Q0 は
 rx_fir_decimator 経由 — V1 確認済み）を新規モジュール `rtl/pack8.v`（MIT）で 8bit へ
