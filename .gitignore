@@ -1,0 +1,18 @@
+# ビルド成果物
+build/
+*.frm
+*.dfu
+*.bit
+*.xsa
+*.bin
+
+# Vivado / Vitis の散らかし
+*.jou
+*.log
+*.str
+.Xil/
+vivado*.backup.jou
+vivado*.backup.log
+
+# エディタ
+.vscode/
