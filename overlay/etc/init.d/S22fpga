@@ -19,6 +19,13 @@ start)
 	i=0
 	while [ "$(cat $MGR/state)" != "operating" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
 	echo "$(cat $MGR/state)"
+	# PL 再ロードで PL 上の IP はリセットされるが、起動時に probe 済みのドライバ（axi-dmac 等）は
+	# それを知らない。DMA を確実に再初期化するため unbind → bind し直す。
+	D=/sys/bus/platform/drivers
+	for dev in 79020000.cf-ad9361-lpc; do [ -e $D/cf_axi_adc/$dev ] && echo $dev > $D/cf_axi_adc/unbind; done
+	for dev in 79024000.cf-ad9361-dds-core-lpc; do [ -e $D/cf_axi_dds/$dev ] && echo $dev > $D/cf_axi_dds/unbind; done
+	for dev in 7c400000.dma 7c420000.dma; do [ -e $D/axi-dmac/$dev ] && echo $dev > $D/axi-dmac/unbind; done
+	for dev in 7c400000.dma 7c420000.dma; do echo $dev > $D/axi-dmac/bind 2>/dev/null; done
 	# AD9361 は初回 probe（公式 PL）で失敗しているので再バインド。成功すれば cf-ad9361 系の
 	# deferred probe もカーネルが自動で完了させる。
 	if [ ! -e /sys/bus/spi/drivers/ad9361/spi0.0 ]; then
