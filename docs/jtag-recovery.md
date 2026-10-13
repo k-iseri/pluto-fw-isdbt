@@ -88,3 +88,7 @@ boot 復元後も firmware(itb)側の SDR は「このボードのピン配置�
    (tezuka_fw/doc/crashnano.md)で、この個体と設計が同一かも未確認
 3. 自作 v1: tezuka の nano XDC からピン配置(事実情報)を転記して公式構成の HDL を
    このボード向けにビルド(Vivado 導入後)
+
+**追記（2026-10-13 夜）**: Pico を配線したままだと **JTAG 信号線経由で基板が寄生給電**され、
+両 USB を抜いても POWER/DONE が点いたまま（= 電源断にならない）。電源断の手順は
+「Pico の USB を抜く → 板の両 USB を抜く → 10 秒 → UART → SLAVE → 最後に Pico の USB」。
