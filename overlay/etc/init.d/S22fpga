@@ -24,8 +24,8 @@ start)
 	D=/sys/bus/platform/drivers
 	for dev in 79020000.cf-ad9361-lpc; do [ -e $D/cf_axi_adc/$dev ] && echo $dev > $D/cf_axi_adc/unbind; done
 	for dev in 79024000.cf-ad9361-dds-core-lpc; do [ -e $D/cf_axi_dds/$dev ] && echo $dev > $D/cf_axi_dds/unbind; done
-	for dev in 7c400000.dma 7c420000.dma; do [ -e $D/axi-dmac/$dev ] && echo $dev > $D/axi-dmac/unbind; done
-	for dev in 7c400000.dma 7c420000.dma; do echo $dev > $D/axi-dmac/bind 2>/dev/null; done
+	for dev in 7c400000.dma 7c420000.dma; do [ -e $D/dma-axi-dmac/$dev ] && echo $dev > $D/dma-axi-dmac/unbind; done
+	for dev in 7c400000.dma 7c420000.dma; do echo $dev > $D/dma-axi-dmac/bind 2>/dev/null; done
 	# AD9361 は初回 probe（公式 PL）で失敗しているので再バインド。成功すれば cf-ad9361 系の
 	# deferred probe もカーネルが自動で完了させる。
 	if [ ! -e /sys/bus/spi/drivers/ad9361/spi0.0 ]; then
