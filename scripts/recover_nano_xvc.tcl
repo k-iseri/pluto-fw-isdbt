@@ -1,5 +1,7 @@
-# 改良版復旧: rst -processor でクリーン化 → FSBL（JTAG モードなら DDR 初期化後に待機ループ）
-# → vendor u-boot（JTAG モードなので bootcmd が jtagboot = 自動 DFU）
+# SPDX-License-Identifier: MIT
+# 実機で成功した復旧シーケンス（2026-10-13）。recover_nano_xvc.sh から呼ぶ。
+# 前提: POR 時に short JTAG パッドをピンセットで短絡（ラッチ後に離す）し BOOT_MODE=0 にしておく。
+# rst -processor では周辺が初期化されないため、やり直す際は rst -system を使う（docs/jtag-recovery.md）。
 set parts "/mnt/c/Users/water/pluto-fw-isdbt/recovery/vendor-boot-parts"
 
 connect -url tcp:127.0.0.1:3121
