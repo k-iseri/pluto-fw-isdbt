@@ -180,6 +180,12 @@ BonDriver は `[SDR] FpgaEq=auto|0|1`、isdbtd は `--fpga-eq`。
 再開」の段階を足し、実物 xfft IP で 6 フレームとも長さ正常（PASS）。hdl フォークは `fe_fft/aresetn` を
 `logic_inv` から `fe_win/fft_aresetn` に（c56754e）。
 
+**eq6 ファーム（`recovery/pluto-v0.39-isdbt-nano-v2b3c-eq6.frm`、WNS +1.21 ns、LUT/BRAM/DSP は eq5 と同等）の実機結果（06:00）**:
+isdbtd で 24 → 22 → 24 と選局して 3 回とも再試行なしで δ = 9 を得てモード 4 に入った（eq5 では 1〜4 回の再試行）。
+同時刻の MER は FPGA 経路 A 17〜21 / B 19〜21 dB、raw ホスト復調 A 24 / B 24.6 dB で、eq5 に戻しても A 20.8 / B 20.8 dB
+だった → 低下は eq6 のせいではなく受信条件（朝方）。**FPGA 経路と raw の差が時間帯で −0.7 → −1.7 → −3.5 dB と広がる**のは
+未解明（AGC 固定、AFC ω が 0.013 → 0.033 bin に増えている、多重波の変動のどれか）。次の課題。
+
 ## 4. 検証計画
 
 | 段階 | 合格基準 |
