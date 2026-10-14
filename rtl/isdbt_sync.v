@@ -236,7 +236,11 @@ module isdbt_sync #(
           at_x <= max_re >>> 12;
           at_y <= max_im >>> 12;
         end else begin
+          // 外れ: 予測位置でも窓は出す（シンボルを欠かすと等化器の SP 位相予測と履歴の年齢がずれる）
           pred <= pred + T;
+          start_valid <= 1'b1;
+          start_pos <= pred + 1 + NG - margin;
+          tim_delta <= ({pred + 1 + NG - margin, 8'd0} - tau_next[47:8]);
           if (miss == MISS_MAX - 1) begin
             state <= S_ACQ;
             cnt <= 'd0;

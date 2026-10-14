@@ -175,7 +175,9 @@ module isdbt_eq #(
   // パス A: 受信・回転・SP エネルギー・受信中 SP パス
   // ============================================================
   reg   [3:0]   slot_a = 'd0;            // 受信中のシンボルのスロット
-  reg   [1:0]   sp_pred = 'd0;           // 受信中のシンボルの SP 位相（予測）
+  reg   [1:0]   sp_pred = 'd0;           // 次のシンボルの SP 位相（予測。前シンボルの検出 +1）
+  reg   [1:0]   sp_use = 'd0;            // 受信中のシンボルに使う位相（sp_pred + 飛んだシンボル数）
+  reg   [31:0]  prev_start = 'd0;        // 前の窓の開始（飛んだシンボル数の判定用）
   reg   [12:0]  a_bin = 'd0;
   reg           a_first = 1'b1;
   reg   [31:0]  a_phase = 'd0;
@@ -200,7 +202,12 @@ module isdbt_eq #(
   wire [3:0]  cur_cm = a_first ? car0_mod12_w : a_cmod12;
   wire        cur_is_grid = (cur_car < TOTAL) && (cur_cm == 4'd0 || cur_cm == 4'd3 || cur_cm == 4'd6 || cur_cm == 4'd9);
   wire [1:0]  cur_pidx = (cur_cm == 4'd0) ? 2'd0 : (cur_cm == 4'd3) ? 2'd1 : (cur_cm == 4'd6) ? 2'd2 : 2'd3;
-  wire        cur_is_sp = cur_is_grid && (cur_pidx == sp_pred) && sp_known;   // 予測位相の SP（受信中 SP パスの対象）
+  // 窓開始の差から飛んだシンボル数（0〜3）。同期が窓を欠かしたときも位相の予測と履歴の年齢を合わせる
+  wire [31:0] start_diff = hdr_start - prev_start;
+  wire [1:0]  n_skip = (start_diff < 32'd13824) ? 2'd0 : (start_diff < 32'd23040) ? 2'd1 : (start_diff < 32'd32256) ? 2'd2 : 2'd3;
+  wire [1:0]  sp_use_w = a_first ? (sp_pred + n_skip) : sp_use;
+  wire [3:0]  slot_cur = a_first ? (slot_a + {2'b0, n_skip}) : slot_a;
+  wire        cur_is_sp = cur_is_grid && (cur_pidx == sp_use_w) && sp_known;   // 予測位相の SP（受信中 SP パスの対象）
   wire [8:0]  cur_m = a_first ? car0_div12_w : a_m;    // = ⌊cur_car/12⌋（SP の履歴添字 m = (k − 3p)/12 = ⌊k/12⌋）
 
   wire signed [11:0] in_i = m_tdata[11:0];
@@ -220,7 +227,7 @@ module isdbt_eq #(
   reg           sgn2 = 1'b0, sgn3 = 1'b0;
   reg   signed [12:0] hsp3_i = 'd0, hsp3_q = 'd0, hsp4_i = 'd0, hsp4_q = 'd0;
   reg   signed [12:0] h4_i = 'd0, h4_q = 'd0;
-  wire  [3:0]   slot_a4 = slot_a - 4'd4;
+  wire  [3:0]   slot_a4 = slot_cur - 4'd4;
   wire signed [8:0] exp_d4 = $signed({1'b0, hist_exp[slot_a4]}) - $signed({1'b0, exp_a});
   reg   signed [39:0] acc_re = 'd0, acc_im = 'd0;
   reg   [39:0]  acc_hh = 'd0, acc_h4 = 'd0;
@@ -265,7 +272,10 @@ module isdbt_eq #(
           a_inc <= -({{11{hdr_delta[20]}}, hdr_delta[20:0]} << 11);
           a_first <= 1'b0;
           a_known <= sp_known;
-          hist_exp[slot_a] <= m_tuser[23:16];
+          sp_use <= sp_use_w;
+          slot_a <= slot_cur;                           // 飛んだシンボルのスロットは古いまま飛ばす
+          prev_start <= hdr_start;
+          hist_exp[slot_cur] <= m_tuser[23:16];
           acc_re <= 'd0; acc_im <= 'd0; acc_hh <= 'd0; acc_h4 <= 'd0;
         end
         rotA_sc <= sincos_rom[cur_phase[31:22]];
@@ -325,7 +335,7 @@ module isdbt_eq #(
       sp4 <= sp3;
       if (sp3) begin
         hist_we <= 1'b1;
-        hist_addr_a <= {slot_a, m3};
+        hist_addr_a <= {slot_a, m3};               // a_first の次のサイクル以降なので slot_a は更新済み
         hist_wdata <= {hsp3_q_w, hsp3_i_w};
         hsp3_i <= hsp3_i_w;
         hsp3_q <= hsp3_q_w;
@@ -462,9 +472,9 @@ module isdbt_eq #(
       // 受信完了: 次の受信のための位相予測を更新し、処理待ちに積む（IDLE で同時に取り込むなら増やさない）
       if (a_done) begin
         sp_pred <= eq_flags[2] ? eq_flags[5:4] + 1'b1 : a_sp_best + 1'b1;
-        sp_known <= (eq_flags[2] || eq_flags[3]) ? 1'b1 : (a_known ? (a_sp_best == sp_pred) : 1'b1);
-        dbg_best <= a_sp_best; dbg_pred <= sp_pred;
-        if (a_known && a_sp_best != sp_pred) dbg_mismatch <= dbg_mismatch + 1'b1;
+        sp_known <= (eq_flags[2] || eq_flags[3]) ? 1'b1 : (a_known ? (a_sp_best == sp_use) : 1'b1);
+        dbg_best <= a_sp_best; dbg_pred <= sp_use;
+        if (a_known && a_sp_best != sp_use) dbg_mismatch <= dbg_mismatch + 1'b1;
         if (state != S_IDLE) begin
           overrun_cnt <= overrun_cnt + 1'b1;
           pending <= (pending == 2'd3) ? 2'd3 : pending + 1'b1;
@@ -481,7 +491,7 @@ module isdbt_eq #(
             sp_b <= eq_flags[2] ? eq_flags[5:4] : a_sp_best;
             sp_phase <= eq_flags[2] ? eq_flags[5:4] : a_sp_best;
             bacc_re <= acc_re; bacc_im <= acc_im; bacc_hh <= acc_hh; bacc_h4 <= acc_h4;
-            if (!a_known || (!eq_flags[2] && !eq_flags[3] && a_sp_best != sp_pred)) begin
+            if (!a_known || (!eq_flags[2] && !eq_flags[3] && a_sp_best != sp_use)) begin
               // 受信中 SP パスが無効（位相未知、または予測外れ）: 積算を空にして CSI = 0（消失）で出す。
               // 履歴のこのシンボルのスロットは古いままになるが、立ち上がり／同期外れ時だけ
               bacc_re <= 'd0; bacc_im <= 'd0; bacc_hh <= 'd0; bacc_h4 <= 'd0;
