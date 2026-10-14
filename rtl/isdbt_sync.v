@@ -185,8 +185,8 @@ module isdbt_sync #(
                 start_valid <= 1'b1;
                 start_pos <= max2_idx + 1 + NG - margin;
                 at_valid <= 1'b1;
-                at_x <= max2_re >>> 12;
-                at_y <= max2_im >>> 12;
+                at_x <= max2_re >>> 10;      // isdbt_gi_corr の mag2 と同じスケール（弱い信号で粗さが出ないよう >> 10）
+                at_y <= max2_im >>> 10;
                 // 時間軸の初期化: τ = 最初の窓開始（この時点の start_pos）、ブロック計数開始
                 tau <= {max2_idx + 1 + NG - margin, 16'd0};
                 tim_delta <= 'd0;
@@ -249,8 +249,8 @@ module isdbt_sync #(
           // Δ_n = s_n − τ_n（τ はこの計測で進めた後の値。進める前を使うと 1 シンボル分 = 9216 ずれる）
           tim_delta <= ({pred + pred_corr + 1 + NG - margin, 8'd0} - tau_next[47:8]);
           at_valid <= 1'b1;
-          at_x <= max_re >>> 12;
-          at_y <= max_im >>> 12;
+          at_x <= max_re >>> 10;
+          at_y <= max_im >>> 10;
         end else begin
           // 外れ: 予測位置でも窓は出す（シンボルを欠かすと等化器の SP 位相予測と履歴の年齢がずれる）
           pred <= pred + T;

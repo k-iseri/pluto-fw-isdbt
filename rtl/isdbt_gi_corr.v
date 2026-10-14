@@ -2,7 +2,9 @@
 //
 //   p[n] = x[n] · conj(x[n−N])
 //   c[n] = Σ_{m=n−Ng+1}^{n} p[m]       （再帰: c[n] = c[n−1] + p[n] − p[n−Ng]）
-//   mag2[n] = |c[n] >> 12|²            （比較用。32bit に収める）
+//   mag2[n] = |c[n] >> 10|²            （比較用。|c| ≤ 2·127²·Ng < 2^25 なので >> 10 で 16bit に収まり、mag2 は 2^31 以下。
+//                                       以前の >> 12 は −30 dBFS（8bit で rms 4）で c>>12 ≈ 8 になり、ピーク比較と
+//                                       atan2 が整数の粗さで崩れて同期が窓を欠かした。2026-10-15）
 //
 // シンボル（GI 込み長 T = N + Ng）が [s, s+T) にあるとき、GI = [s, s+Ng) と [s+N, s+T) が等しいので
 // |c[n]| は n = s + T − 1（シンボルの末尾）で最大になる。
@@ -102,8 +104,8 @@ module isdbt_gi_corr #(
   end
 
   // ---- 振幅² ----
-  wire signed [15:0] cr16 = acc_re >>> 12;
-  wire signed [15:0] ci16 = acc_im >>> 12;
+  wire signed [15:0] cr16 = acc_re >>> 10;
+  wire signed [15:0] ci16 = acc_im >>> 10;
   // 遅延線が埋まるまで（N + Ng サンプル）は出力しない（相関が移動和になっていない）
   always @(posedge clk) begin
     valid_out <= v4 && (warm >= N + NG);
