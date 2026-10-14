@@ -12,7 +12,7 @@
 //   0x14    DROP_CNT     R   adc_dovf が 1 だったクロック数 = 捨てた DMA ビート数
 //   0x18    FORMAT       R   bit[7:0] = pack8 のシフト量
 //   0x1C    CAPS         R   能力ビット: bit0 8bit I/Q、bit1 サンプルカウンタ、bit2 FFT テスト出力、
-//                            bit3 等化済みキャリア出力（モード 4）、bit4 TS 出力（未実装）
+//                            bit3 等化済みキャリア出力（モード 4）、bit4 ADC レベル計（0x54）、bit5 TS 出力（未実装）
 //   0x20    MODE         RW  DMA に流すもの: 0 = raw I/Q（pack8/cpack、既定）、1 = FFT テスト（窓ごとに 8192 ビン）、
 //                            2 = 同期 FFT 16bit、3 = 同期 FFT 8bit、4 = 等化済みキャリア（I/Q/CSI 各 8bit）
 //   0x24    WIN_STRIDE   RW  窓の開始間隔 [サンプル]（既定 9216 = Mode 3 GI 1/8 のシンボル長）
@@ -29,6 +29,8 @@
 //   0x48    EQ_OMEGA     R   AFC の ω（turns/シンボル、2^32 = 1 回転）
 //   0x4C    TIM_EST      R   同期の T_est（16.16、シンボル長の推定 [サンプル]）
 //   0x50    TIM_DELTA    R   直近の窓の Δ_n（1/256 サンプル）
+//   0x54    ADC_LEVEL    R   pack8 後の 8bit I/Q の I²+Q² を 65536 サンプル積算した値（≈ 8 ms ごとに更新。
+//                            dBFS = 10 log10(v / 65536 × (2^PACK_SHIFT/2048)²)。VERSION 4、CAPS bit4。isdbt_level）
 //
 // クロック: カウンタと前段制御は ADC クロック（d_clk = l_clk）、レジスタは AXI クロック。
 // up → d は up_xfer_cntrl、d → up は up_xfer_status（ADI のハンドシェイク CDC）。
@@ -63,6 +65,7 @@ module isdbt_regs #(
   input       [31:0]      d_eq_omega,
   input       [31:0]      d_tim_est,
   input       [31:0]      d_tim_delta,
+  input       [31:0]      d_adc_level,
 
   // プロセッサインターフェース（axi_ad9361 内部バス）
   input                   up_rstn,
@@ -100,8 +103,8 @@ module isdbt_regs #(
   end
   assign d_sample_count = d_cnt;
 
-  // ---- d → up: 384bit ----
-  wire  [383:0] up_status_s;
+  // ---- d → up: 416bit ----
+  wire  [415:0] up_status_s;
   wire  [63:0]  up_cnt_s = up_status_s[63:0];
   wire  [31:0]  up_ovf_cnt_s = up_status_s[95:64];
   wire  [31:0]  up_drop_cnt_s = up_status_s[127:96];
@@ -113,16 +116,17 @@ module isdbt_regs #(
   wire  [31:0]  up_eq_omega_s = up_status_s[319:288];
   wire  [31:0]  up_tim_est_s = up_status_s[351:320];
   wire  [31:0]  up_tim_delta_s = up_status_s[383:352];
+  wire  [31:0]  up_adc_level_s = up_status_s[415:384];
 
   up_xfer_status #(
-    .DATA_WIDTH (384)
+    .DATA_WIDTH (416)
   ) i_xfer_status (
     .up_rstn (up_rstn),
     .up_clk (up_clk),
     .up_data_status (up_status_s),
     .d_rst (d_rst),
     .d_clk (d_clk),
-    .d_data_status ({d_tim_delta, d_tim_est, d_eq_omega, d_eq_status, d_sync_peak, d_sync_status, d_fe_frames, d_fe_status, d_drop_cnt, d_ovf_cnt, d_cnt}));
+    .d_data_status ({d_adc_level, d_tim_delta, d_tim_est, d_eq_omega, d_eq_status, d_sync_peak, d_sync_status, d_fe_frames, d_fe_status, d_drop_cnt, d_ovf_cnt, d_cnt}));
 
   // ---- up → d: 制御 60bit ----
   reg   [15:0]  up_eq_ctrl = 16'h0300;
@@ -197,6 +201,7 @@ module isdbt_regs #(
           5'h12: up_rdata <= up_eq_omega_s;
           5'h13: up_rdata <= up_tim_est_s;
           5'h14: up_rdata <= up_tim_delta_s;
+          5'h15: up_rdata <= up_adc_level_s;
           default: up_rdata <= 32'd0;
         endcase
       end else begin

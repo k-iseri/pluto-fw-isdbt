@@ -180,6 +180,10 @@ BonDriver は `[SDR] FpgaEq=auto|0|1`、isdbtd は `--fpga-eq`。
 再開」の段階を足し、実物 xfft IP で 6 フレームとも長さ正常（PASS）。hdl フォークは `fe_fft/aresetn` を
 `logic_inv` から `fe_win/fft_aresetn` に（c56754e）。
 
+**モード 3/4 中のソフト AGC（eq7）**: 前段動作中は raw I/Q が来ないのでホストのレベル測定が止まり、選局時のゲインで固定されて
+いた。`rtl/isdbt_level.v`（pack8 後の 8bit I/Q の I²+Q² を 65536 サンプル積算、≈ 8 ms 更新）をレジスタ 0x54 ADC_LEVEL に出し
+（VERSION 4、CAPS bit4 = 0x1F）、ホストは約 1 秒ごとに読んで raw と同じ dBFS 定義（PACK_SHIFT で換算）で同じ AGC を回す。
+
 **eq6 ファーム（`recovery/pluto-v0.39-isdbt-nano-v2b3c-eq6.frm`、WNS +1.21 ns、LUT/BRAM/DSP は eq5 と同等）の実機結果（06:00）**:
 isdbtd で 24 → 22 → 24 と選局して 3 回とも再試行なしで δ = 9 を得てモード 4 に入った（eq5 では 1〜4 回の再試行）。
 同時刻の MER は FPGA 経路 A 17〜21 / B 19〜21 dB、raw ホスト復調 A 24 / B 24.6 dB で、eq5 に戻しても A 20.8 / B 20.8 dB
