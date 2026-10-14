@@ -324,20 +324,21 @@ module isdbt_eq #(
   reg   [31:0]  csi_k = 'd0;
   wire  [45:0]  div_sh = {div_rem[44:0], div_num[44]};
 
-  // B2
+  // B2（格子 1 点 = 3 サイクル = 3 キャリア、1 キャリア/サイクル。履歴は 2 格子先を先読み）
+  //   周期 q: 格子 f = q を読む（ph0 に a、ph1 に b。読み出しは 2 サイクル後）。ph1 で f−1 の平均 Hf を作り、
+  //   ph2 で H_cur ← H_next ← Hf。発行する格子は j = q − 3（H_cur = H[j]、H_next = H[j+1]）
   reg   [12:0]  b2_k = 'd0;
-  reg   [10:0]  b2_j = 'd0;
-  reg   [2:0]   b2_ph = 'd0;             // 格子期間内の位置 0..7
+  reg   [10:0]  b2_f = 'd0;              // 読み出し中の格子
+  reg   [10:0]  b2_q = 'd0;              // 周期番号
+  reg   [1:0]   b2_ph = 'd0;
   reg   [12:0]  b2_addr = 'd0;
-  reg   [25:0]  hg_j_a = 'd0, hg_j_b = 'd0, hg_j1_a = 'd0, hg_j1_b = 'd0;
-  reg   [2:0]   sl_ja = 'd0, sl_jb = 'd0, sl_j1a = 'd0, sl_j1b = 'd0;
-  wire  [10:0]  b2_j1 = (b2_j >= M - 1) ? (M - 1) : b2_j + 1'b1;
-  wire signed [8:0] exp_d_ja = $signed({1'b0, hist_exp[sl_ja]}) - $signed({1'b0, cur_exp});
-  wire signed [8:0] exp_d_jb = $signed({1'b0, hist_exp[sl_jb]}) - $signed({1'b0, cur_exp});
-  wire signed [8:0] exp_d_j1a = $signed({1'b0, hist_exp[sl_j1a]}) - $signed({1'b0, cur_exp});
-  wire signed [8:0] exp_d_j1b = $signed({1'b0, hist_exp[sl_j1b]}) - $signed({1'b0, cur_exp});
-  reg   signed [12:0] Hg_j_i = 'd0, Hg_j_q = 'd0, Hg_j1_i = 'd0, Hg_j1_q = 'd0;         // 使用中
-  reg   signed [12:0] Hn_j_i = 'd0, Hn_j_q = 'd0, Hn_j1_i = 'd0, Hn_j1_q = 'd0;         // 次の格子
+  wire  [10:0]  b2_fc = (b2_f >= M - 1) ? (M - 1) : b2_f;      // 末尾は M−1 を繰り返す（H_next = H_cur）
+  reg   [25:0]  hg_a = 'd0, hg_b = 'd0;
+  reg   [2:0]   sl_a = 'd0, sl_b = 'd0, sl_a_p = 'd0, sl_b_p = 'd0;
+  wire signed [8:0] exp_d_pa = $signed({1'b0, hist_exp[sl_a_p]}) - $signed({1'b0, cur_exp});
+  wire signed [8:0] exp_d_pb = $signed({1'b0, hist_exp[sl_b_p]}) - $signed({1'b0, cur_exp});
+  reg   signed [12:0] Hf_i = 'd0, Hf_q = 'd0;                   // 読み終えた格子の平均
+  reg   signed [12:0] Hg_j_i = 'd0, Hg_j_q = 'd0, Hg_j1_i = 'd0, Hg_j1_q = 'd0;   // H_cur, H_next
   reg   [7:0]   tail_cnt = 'd0;
 
   // B2 データパイプライン
@@ -491,35 +492,38 @@ module isdbt_eq #(
             div_cnt <= div_cnt + 1'b1;
           end else begin
             csi_k <= (div_den == 'd0) ? 32'd0 : div_q;
-            b2_k <= 'd0; b2_j <= 'd0; b2_ph <= 'd0;
+            b2_k <= 'd0; b2_f <= 'd0; b2_q <= 'd0; b2_ph <= 'd0;
             b2_addr <= base_bin;
+            Hg_j_i <= 'd0; Hg_j_q <= 'd0; Hg_j1_i <= 'd0; Hg_j1_q <= 'd0;
             state <= S_B2;
           end
         end
-        // ---- B2: 格子期間 8 サイクル。期間 j: 格子 j, j+1 を読んで Hn に用意し、期間末に Hg へ。
-        //      同じ期間に、前の期間で用意した Hg（格子 j−1）のキャリア 3 本を位置 1,3,5 で発行 ----
+        // ---- B2: 周期 3 サイクル（上の宣言のコメント参照）----
         S_B2: begin
           case (b2_ph)
-            3'd0: begin hist_raddr <= {grid_slot(sp_phase, b2_j, slot, 1'b0), b2_j[10:2]}; sl_ja <= grid_slot(sp_phase, b2_j, slot, 1'b0); end
-            3'd1: begin hist_raddr <= {grid_slot(sp_phase, b2_j, slot, 1'b1), b2_j[10:2]}; sl_jb <= grid_slot(sp_phase, b2_j, slot, 1'b1); end
-            3'd2: begin hist_raddr <= {grid_slot(sp_phase, b2_j1, slot, 1'b0), b2_j1[10:2]}; sl_j1a <= grid_slot(sp_phase, b2_j1, slot, 1'b0); hg_j_a <= hist_rdata; end
-            3'd3: begin hist_raddr <= {grid_slot(sp_phase, b2_j1, slot, 1'b1), b2_j1[10:2]}; sl_j1b <= grid_slot(sp_phase, b2_j1, slot, 1'b1); hg_j_b <= hist_rdata; end
-            3'd4: begin hg_j1_a <= hist_rdata; end
-            3'd5: begin hg_j1_b <= hist_rdata; end
-            3'd6: begin
-              Hn_j_i <= (align(hg_j_a[12:0], exp_d_ja) + align(hg_j_b[12:0], exp_d_jb)) >>> 1;
-              Hn_j_q <= (align(hg_j_a[25:13], exp_d_ja) + align(hg_j_b[25:13], exp_d_jb)) >>> 1;
-              Hn_j1_i <= (align(hg_j1_a[12:0], exp_d_j1a) + align(hg_j1_b[12:0], exp_d_j1b)) >>> 1;
-              Hn_j1_q <= (align(hg_j1_a[25:13], exp_d_j1a) + align(hg_j1_b[25:13], exp_d_j1b)) >>> 1;
+            2'd0: begin
+              hist_raddr <= {grid_slot(sp_phase, b2_fc, slot, 1'b0), b2_fc[10:2]};
+              sl_a <= grid_slot(sp_phase, b2_fc, slot, 1'b0);
+              hg_b <= hist_rdata;                       // 前周期 ph1 発行（f−1 の b）
+              sl_a_p <= sl_a; sl_b_p <= sl_b;           // f−1 のスロット
             end
-            3'd7: begin
-              Hg_j_i <= Hn_j_i; Hg_j_q <= Hn_j_q; Hg_j1_i <= Hn_j1_i; Hg_j1_q <= Hn_j1_q;
+            2'd1: begin
+              hist_raddr <= {grid_slot(sp_phase, b2_fc, slot, 1'b1), b2_fc[10:2]};
+              sl_b <= grid_slot(sp_phase, b2_fc, slot, 1'b1);
+              Hf_i <= (align(hg_a[12:0], exp_d_pa) + align(hg_b[12:0], exp_d_pb)) >>> 1;     // f−1 の平均
+              Hf_q <= (align(hg_a[25:13], exp_d_pa) + align(hg_b[25:13], exp_d_pb)) >>> 1;
+            end
+            default: begin
+              hg_a <= hist_rdata;                       // この周期 ph0 発行（f の a）
+              Hg_j_i <= Hg_j1_i; Hg_j_q <= Hg_j1_q;     // H_cur ← H_next ← Hf
+              Hg_j1_i <= Hf_i; Hg_j1_q <= Hf_q;
             end
           endcase
-          if (b2_j != 0 && (b2_ph == 3'd1 || b2_ph == 3'd3 || b2_ph == 3'd5) && b2_k < TOTAL) begin
+          // 発行: 格子 j = q − 3 のキャリア r = ph
+          if (b2_q >= 11'd3 && b2_k < TOTAL) begin
             sym_raddr <= b2_addr;
             p_v[0] <= 1'b1;
-            cr <= (b2_ph == 3'd1) ? 17'd0 : (b2_ph == 3'd3) ? 17'd21845 : 17'd43691;
+            cr <= (b2_ph == 2'd0) ? 17'd0 : (b2_ph == 2'd1) ? 17'd21845 : 17'd43691;
             Hb_i <= Hg_j_i; Hb_q <= Hg_j_q;
             d_i <= Hg_j1_i - Hg_j_i; d_q <= Hg_j1_q - Hg_j_q;
             b2_k <= b2_k + 1'b1;
@@ -527,13 +531,16 @@ module isdbt_eq #(
           end else begin
             p_v[0] <= 1'b0;
           end
-          b2_ph <= b2_ph + 1'b1;
-          if (b2_ph == 3'd7) begin
-            if (b2_j == M) begin
+          if (b2_ph == 2'd2) begin
+            b2_ph <= 'd0;
+            b2_f <= b2_f + 1'b1;
+            b2_q <= b2_q + 1'b1;
+            if (b2_q == M + 2) begin                    // 格子 M−1 を発行し終えた
               state <= S_B2_TAIL;
               tail_cnt <= 'd0;
             end
-            b2_j <= b2_j + 1'b1;
+          end else begin
+            b2_ph <= b2_ph + 1'b1;
           end
         end
         S_B2_TAIL: begin

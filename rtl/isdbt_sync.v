@@ -111,7 +111,9 @@ module isdbt_sync #(
   reg   [1:0]   blk_stage = 'd0;        // 0: L=8, 1: L=10, 2: L=12, 3: L=13（IIR）
   reg           tim_init = 1'b0;
   wire  [13:0]  blk_len = (blk_stage == 2'd0) ? 14'd256 : (blk_stage == 2'd1) ? 14'd1024 : (blk_stage == 2'd2) ? 14'd4096 : 14'd8192;
-  wire  [31:0]  pred_diff = pred - pred_mark;
+  wire          trk_ok_w = (max_mag >= (avg_peak >> 2)) && trk_par_ok;
+  wire  [31:0]  pred_next = pred + T + (trk_ok_w ? pred_corr : 32'sd0);    // この計測で更新した後の pred
+  wire  [31:0]  pred_diff = pred_next - pred_mark;                            // ブロック先頭も「更新後の pred」で揃える
   wire  [47:0]  blk_est48 = {pred_diff, 16'd0} >> ((blk_stage == 2'd0) ? 8 : (blk_stage == 2'd1) ? 10 : (blk_stage == 2'd2) ? 12 : 13);
   wire  [31:0]  blk_est = blk_est48[31:0];
   wire signed [32:0] est_diff = $signed({1'b0, blk_est}) - $signed({1'b0, t_est});
@@ -213,7 +215,7 @@ module isdbt_sync #(
           tau <= tau_next;
           if (blk_cnt == blk_len - 1) begin
             t_est <= (blk_stage == 2'd3) ? (t_est + (est_diff[32:1])) : blk_est;   // 最終段は IIR 1/2
-            pred_mark <= pred + T + (( max_mag >= (avg_peak >> 2) && trk_par_ok) ? pred_corr : 32'sd0);
+            pred_mark <= pred_next;
             blk_cnt <= 'd0;
             if (blk_stage != 2'd3) blk_stage <= blk_stage + 1'b1;
           end else begin

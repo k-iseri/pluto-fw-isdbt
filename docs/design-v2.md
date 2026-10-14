@@ -148,7 +148,7 @@ DMA に流し、モード 0 では従来どおり cpack の raw I/Q（`rtl/isdbt
 | パス B2（等化、格子 1 点 8 サイクル = 3 キャリア、15k サイクル） | 格子 j の H = 直近 2 シンボル（同位相、年齢 a と a+4）の平均（指数差を整列）、線形補間（×21845/43691 >> 16）。y' = y·e^{−jφ_cpe}、|H|² → clz 正規化 → 逆数表（10bit 入口、(1/m−1)·2^16）、D = y'·conj(H)·inv >> (42 − clz) を丸めて 8bit（LSB 1/64）。CSI = ((|H|² >> 8)·K) >> 20、K = ⌊1872·2^34 / S⌋（逐次除算、S = Σ|H_sp + H4|²） |
 | 出力 | 5617 × {I8, Q8, CSI8} = 16851 B → 4213 ワード（+ ヘッダ 8 ワード、fmt = 2、w5 = Δ_n）、882 シンボル/s で 14.9 MB/s |
 | レジスタ | 0x40 EQ_CTRL（δ、AFC/CPE 有効、SP 位相固定）、0x44 EQ_STATUS、0x48 EQ_OMEGA、0x4C TIM_EST、0x50 TIM_DELTA。レジスタ空間 32 ワード、VERSION 3、CAPS 0xF |
-| 資源見込み | BRAM: シンボル 6 + 履歴 3 + 表 1.5 ≈ 11（→ 56/60）、DSP ≈ 32（→ 53/80）、LUT +2〜3k（→ 85〜90 %） |
+| 資源（実測） | 最初のビルドは **24,212 LUT で 7010 に入らなかった**（シンボル BRAM 8K×26 が ram_style=block でも infeasible と言われ分散 RAM 4.6k LUT に、表 3 つが LUT 論理に、fe_eq 論理 4.6k + CORDIC atan2 0.9k）。対策: シンボル BRAM を 4K×26 × 2 バンク、表に rom_style=block、atan2 を逐次 CORDIC（0.9k → 0.47k）、同期の回転器も CORDIC 12 段から sin/cos 表 + 複素乗算へ（−1k）、逆数の 44bit バレルシフタを inv の前シフトに、除算器 46bit。**結果: LUT 14,264（81 %）、BRAM 58/60、DSP 66/80、WNS +0.67 ns**。fe_eq 単体 2,801 LUT / BRAM 12 / DSP 41 |
 | 検証 | `rtl/isdbt_eq_tb.v` にモデルのビン（`fe_eq_model.py --vectors`）を流し `scripts/check_eq_sim.py` で D/CSI を許容差比較 → 実機は `tools/fe_eq_test.py`（モード 3 で δ 推定 → EQ_CTRL → モード 4 取り込み → ref/ 後段） |
 
 ## 4. 検証計画
