@@ -15,6 +15,7 @@ XDC は [hdl/plutosdr-nano/system_constr.xdc](hdl/plutosdr-nano/system_constr.xd
 
 | 版 | スコープ | 状態 |
 |---|---|---|
+| v0 | **公式 ADI 設計 + 実測ピン配置**（hdl フォーク `projects/pluto_nano`）。自前ビットストリームで ad9361 初期化・受信確認済み（2026-10-14、MER 25 dB / 17 Mbps / 同期エラー 0） | **動作** |
 | v1 | **RX 専用化 + 8bit サンプル転送 + ドロップ検出カウンタ**（USB 2.0 で公称 8.127 MSPS 受信、帯域余裕 ~2 倍、サンプル落ちのハード確定検出） | 設計中 |
 | v2+ | 検討のみ: フル復調の FPGA 化（TS 直接出力）。Zynq-7020 機（Pluto+ / LibreSDR）が本来の土俵 | 未着手 |
 
