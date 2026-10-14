@@ -48,6 +48,9 @@ env -i HOME=$HOME PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/
   （buildroot 本体は改変しない。以前の `patches/buildroot-post-build-overlay.patch` は廃止）
 - `SKIP_LEGAL=1`: legal-info（全ソース取得）を省略
 - `env -i`: WSL が継承する Windows PATH（空白入り）を buildroot が拒否するため
+- `R` は overlay と `scripts/br-post-build.sh` のある最新のチェックアウト（Windows 側なら `/mnt/c/Users/.../pluto-fw-isdbt`）を
+  指すこと。古いクローンを指すと post-build が見つからず `target-finalize` が Error 127 で止まる（2026-10-15）。
+  hdl のビルドも同様に `ISDBT_RTL_DIR=/mnt/c/.../pluto-fw-isdbt/rtl make`
 - `buildroot/output/target` は前回の内容が残るので、overlay からファイルを消したときは target 側も消す
 
 ## .bin の作り方（.bit → byte-swapped .bin）
