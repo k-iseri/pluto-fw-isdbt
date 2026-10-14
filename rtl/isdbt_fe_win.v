@@ -46,6 +46,7 @@ module isdbt_fe_win #(
   output reg  [7:0]       cfg_tdata,
   output reg              cfg_tvalid,
   input                   cfg_tready,
+  output reg              fft_aresetn,     // xfft の aresetn。モード 0（と rst）の間はリセットに保つ
 
   // FFT データ入力
   output      [31:0]      s_tdata,
@@ -66,18 +67,29 @@ module isdbt_fe_win #(
   wire enable = (mode != 4'd0);
   wire sync_mode = (mode == 4'd2) || (mode == 4'd3) || (mode == 4'd4);   // 2 = 同期 FFT 16bit、3 = 同期 FFT 8bit、4 = 等化
 
-  // ---- FFT 設定 ----
+  // ---- FFT のリセットと設定 ----
+  // モード 0 の間は xfft をリセットに保つ。止めるときに窓の途中で入力を切ると xfft は未完のフレームを抱えたまま
+  // 待ち、再開後の最初の窓がその続きとして扱われて以後ずっと出力フレームが窓境界とずれる（実機: モード 4 → 0 → 3 で
+  // フレームが 1.5 窓分の長さになり seq が 1 つおきに飛ぶ。運よく揃うまで 1〜4 回の再試行が要った、2026-10-15）。
+  // リセット後は設定（FWD_INV）も送り直す（aresetn 解除から 16 サイクル置く）
   reg cfg_done = 1'b0;
+  reg [3:0] en_cnt = 'd0;
   always @(posedge clk) begin
-    if (rst) begin
+    if (rst || !enable) begin
+      fft_aresetn <= 1'b0;
+      en_cnt <= 'd0;
       cfg_tvalid <= 1'b0;
       cfg_tdata <= 8'd1;        // bit0 = FWD_INV (1 = forward)
       cfg_done <= 1'b0;
-    end else if (!cfg_done) begin
-      cfg_tvalid <= 1'b1;
-      if (cfg_tvalid && cfg_tready) begin
-        cfg_tvalid <= 1'b0;
-        cfg_done <= 1'b1;
+    end else begin
+      fft_aresetn <= 1'b1;
+      if (en_cnt != 4'd15) en_cnt <= en_cnt + 1'b1;
+      if (!cfg_done && en_cnt == 4'd15) begin
+        cfg_tvalid <= 1'b1;
+        if (cfg_tvalid && cfg_tready) begin
+          cfg_tvalid <= 1'b0;
+          cfg_done <= 1'b1;
+        end
       end
     end
   end

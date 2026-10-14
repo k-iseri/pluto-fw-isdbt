@@ -91,8 +91,10 @@ module isdbt_fe_out #(
   wire signed [15:0] m_q = $signed(m_tdata[16+FFT_W-1:16]);
   wire [31:0] m_tdata_sx = {m_q, m_i};
 
+  // 書き込み側もモード 0 で戻す（読み出し側だけ戻すと再開時に古い残りを 1 フレーム目として読み、ヘッダと
+  // データがずれたまま続く）。モード 0 では xfft がリセットされていて m_tvalid は来ない（isdbt_fe_win の fft_aresetn）
   always @(posedge clk) begin
-    if (rst) begin
+    if (rst || !enable) begin
       sk_wr <= 'd0;
       frame_first <= 1'b1;
       exp_wr <= 'd0;
@@ -156,6 +158,7 @@ module isdbt_fe_out #(
       dropped <= 1'b0;
       sk_rd <= 'd0;
       exp_rd <= 'd0;
+      pk_half <= 1'b0;
       fifo_overflow_count <= 'd0;
       frames_out <= 'd0;
     end else if (!in_frame) begin
