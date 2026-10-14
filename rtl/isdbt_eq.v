@@ -61,7 +61,7 @@ module isdbt_eq #(
   wire afc_en = eq_flags[0];
   wire cpe_en = eq_flags[1];
 
-  localparam [3:0] S_IDLE = 4'd0, S_B1 = 4'd2, S_B1_TAIL = 4'd3, S_AFC_WAIT = 4'd4, S_CPE_ISSUE = 4'd5,
+  localparam [3:0] S_IDLE = 4'd0, S_B1_TAIL = 4'd3, S_AFC_WAIT = 4'd4, S_CPE_ISSUE = 4'd5,
                    S_CPE_WAIT = 4'd6, S_DIV = 4'd7, S_B2 = 4'd8, S_B2_TAIL = 4'd9, S_FLUSH = 4'd10, S_NORM = 4'd11;
   reg   [3:0]   state = S_IDLE;
   reg   [7:0]   sym_count = 'd0;
@@ -161,29 +161,12 @@ module isdbt_eq #(
   endfunction
 
   // ============================================================
-  // 旧 B1（受信後の SP パス。位相未知／予測外れのシンボルだけ）の宣言。受信側 always が履歴ポート A を使うため先に宣言
+  // 処理中シンボルの属性（受信完了時に確定）
   // ============================================================
   reg   [3:0]   slot_b = 'd0;            // 処理中のシンボルのスロット
-  wire  [3:0]   slot_b4 = slot_b - 4'd4;
   reg   [7:0]   exp_b = 'd0;
   reg   [1:0]   sp_b = 'd0;
   reg   [12:0]  base_b = 'd0;
-  reg   [8:0]   b1_m = 'd0, b1_m_end = 'd0;
-  reg   [12:0]  b1_k = 'd0;
-  reg           b1_v1 = 1'b0, b1_v2 = 1'b0, b1_v3 = 1'b0, b1_v4 = 1'b0;
-  reg   [8:0]   b1_m1 = 'd0, b1_m2 = 'd0, b1_m3 = 'd0;
-  reg   [12:0]  b1_k1 = 'd0, b1_k2 = 'd0;
-  reg   [25:0]  b1_y = 'd0, b1_h4raw = 'd0;
-  reg           b1_sign = 1'b0;
-  reg   signed [12:0] b1_hi = 'd0, b1_hq = 'd0, b1_h4i = 'd0, b1_h4q = 'd0;
-  wire signed [8:0] exp_d4b = $signed({1'b0, hist_exp[slot_b4]}) - $signed({1'b0, exp_b});
-  wire signed [12:0] y_i_b1 = b1_y[12:0];
-  wire signed [12:0] y_q_b1 = b1_y[25:13];
-  wire signed [14:0] yb3_i = y_i_b1 * 3;
-  wire signed [14:0] yb3_q = y_q_b1 * 3;
-  wire signed [12:0] hsp_i = b1_sign ? -(yb3_i >>> 2) : (yb3_i >>> 2);
-  wire signed [12:0] hsp_q = b1_sign ? -(yb3_q >>> 2) : (yb3_q >>> 2);
-
   // ============================================================
   // パス A: 受信・回転・SP エネルギー・受信中 SP パス
   // ============================================================
@@ -237,15 +220,10 @@ module isdbt_eq #(
   wire signed [8:0] exp_d4 = $signed({1'b0, hist_exp[slot_a4]}) - $signed({1'b0, exp_a});
   reg   signed [39:0] acc_re = 'd0, acc_im = 'd0;
   reg   [39:0]  acc_hh = 'd0, acc_h4 = 'd0;
-  // 積和の乗算器は受信中 SP パス（sp5）と旧 B1（b1_v4）で共用（同時なら受信側を優先）
-  wire signed [12:0] mx_i = sp5 ? hsp4_i : b1_hi;
-  wire signed [12:0] mx_q = sp5 ? hsp4_q : b1_hq;
-  wire signed [12:0] m4_i = sp5 ? h4_i : b1_h4i;
-  wire signed [12:0] m4_q = sp5 ? h4_q : b1_h4q;
-  wire signed [26:0] prod_hh = mx_i * mx_i + mx_q * mx_q;
-  wire signed [26:0] prod_h4 = m4_i * m4_i + m4_q * m4_q;
-  wire signed [26:0] prod_re = mx_i * m4_i + mx_q * m4_q;
-  wire signed [26:0] prod_im = mx_q * m4_i - mx_i * m4_q;
+  wire signed [26:0] prod_hh = hsp4_i * hsp4_i + hsp4_q * hsp4_q;
+  wire signed [26:0] prod_h4 = h4_i * h4_i + h4_q * h4_q;
+  wire signed [26:0] prod_re = hsp4_i * h4_i + hsp4_q * h4_q;
+  wire signed [26:0] prod_im = hsp4_q * h4_i - hsp4_i * h4_q;
   reg           a_done = 1'b0;
   reg   [3:0]   done_slot = 'd0;        // 受信し終えたシンボルのスロット（a_done と同時に確定）
   reg   [1:0]   a_sp_best = 2'd0;
@@ -344,11 +322,6 @@ module isdbt_eq #(
         hist_wdata <= {hsp3_q_w, hsp3_i_w};
         hsp3_i <= hsp3_i_w;
         hsp3_q <= hsp3_q_w;
-      end else if (b1_v3) begin
-        // 旧 B1 の履歴書き込み（受信中 SP パスと同じサイクルなら受信側を優先。位相未知は立ち上がりだけ）
-        hist_we <= 1'b1;
-        hist_addr_a <= {slot_b, b1_m3};
-        hist_wdata <= {hsp_q, hsp_i};
       end
       // 段 4: H4（段 2 で発行 → 段 3 の端で読み出し → ここで有効）
       sp5 <= sp4;
@@ -459,7 +432,6 @@ module isdbt_eq #(
 
   always @(posedge clk) begin
     at_valid <= 1'b0;
-    b1_v1 <= 1'b0;
     of_we <= 1'b0;
     if (rst || !enable) begin
       state <= S_IDLE;
@@ -475,7 +447,6 @@ module isdbt_eq #(
       hist_fill <= 'd0;
       of_wr <= 'd0; of_rd <= 'd0;
       pk_n <= 'd0;
-      b1_v2 <= 1'b0; b1_v3 <= 1'b0; b1_v4 <= 1'b0;
       out_v <= 1'b0;
       for (pi_ = 0; pi_ < 11; pi_ = pi_ + 1) p_v[pi_] <= 1'b0;
     end else begin
@@ -501,26 +472,10 @@ module isdbt_eq #(
             sp_phase <= eq_flags[2] ? eq_flags[5:4] : a_sp_best;
             bacc_re <= acc_re; bacc_im <= acc_im; bacc_hh <= acc_hh; bacc_h4 <= acc_h4;
             if (!a_known || (!eq_flags[2] && a_sp_best != sp_pred)) begin
-              // 受信中 SP パスが無効（位相未知、または予測外れ）: 受信後に SP パスをやり直す
-              b1_m <= 'd0;
-              b1_m_end <= ((eq_flags[2] ? eq_flags[5:4] : a_sp_best) == 2'd0) ? 9'd468 : 9'd467;
-              b1_k <= {11'd0, (eq_flags[2] ? eq_flags[5:4] : a_sp_best)} * 13'd3;
+              // 受信中 SP パスが無効（位相未知、または予測外れ）: 積算を空にして CSI = 0（消失）で出す。
+              // 履歴のこのシンボルのスロットは古いままになるが、立ち上がり／同期外れ時だけ
               bacc_re <= 'd0; bacc_im <= 'd0; bacc_hh <= 'd0; bacc_h4 <= 'd0;
-              state <= S_B1;
-            end else begin
-              state <= S_B1_TAIL;
-              tail_cnt <= 'd0;
             end
-          end
-        end
-        S_B1: begin
-          sym_raddr <= base_b + b1_k;
-          hist_raddr <= {slot_b4, b1_m};
-          b1_m1 <= b1_m; b1_k1 <= b1_k;
-          b1_v1 <= 1'b1;
-          b1_m <= b1_m + 1'b1;
-          b1_k <= b1_k + 13'd12;
-          if (b1_m == b1_m_end) begin
             state <= S_B1_TAIL;
             tail_cnt <= 'd0;
           end
@@ -678,29 +633,6 @@ module isdbt_eq #(
         end
         default: state <= S_IDLE;
       endcase
-
-      // ---- 旧 B1 パイプライン ----
-      b1_v2 <= b1_v1;
-      b1_k2 <= b1_k1; b1_m2 <= b1_m1;
-      if (b1_v2) begin
-        b1_y <= sym_rdata;
-        b1_sign <= pilot_sign_rom[b1_k2];
-        b1_h4raw <= hist_rdata;
-        b1_m3 <= b1_m2;
-      end
-      b1_v3 <= b1_v2;
-      if (b1_v3) begin
-        b1_hi <= hsp_i; b1_hq <= hsp_q;
-        b1_h4i <= align(b1_h4raw[12:0], exp_d4b);
-        b1_h4q <= align(b1_h4raw[25:13], exp_d4b);
-      end
-      b1_v4 <= b1_v3;
-      if (b1_v4 && !sp5) begin
-        bacc_re <= bacc_re + prod_re;
-        bacc_im <= bacc_im + prod_im;
-        bacc_hh <= bacc_hh + {13'd0, prod_hh};
-        bacc_h4 <= bacc_h4 + {13'd0, prod_h4};
-      end
 
       // ---- B2 パイプライン ----
       for (pi_ = 1; pi_ < 11; pi_ = pi_ + 1) p_v[pi_] <= p_v[pi_ - 1];
