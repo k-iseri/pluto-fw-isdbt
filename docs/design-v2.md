@@ -152,6 +152,8 @@ DMA に流し、モード 0 では従来どおり cpack の raw I/Q（`rtl/isdbt
 | 資源（実測） | 最初のビルドは **24,212 LUT で 7010 に入らなかった**（シンボル BRAM 8K×26 が ram_style=block でも infeasible と言われ分散 RAM 4.6k LUT に、表 3 つが LUT 論理に、fe_eq 論理 4.6k + CORDIC atan2 0.9k）。対策: シンボル BRAM を 4K×26 × 2 バンク、表に rom_style=block、atan2 を逐次 CORDIC（0.9k → 0.47k）、同期の回転器も CORDIC 12 段から sin/cos 表 + 複素乗算へ（−1k）、逆数の 44bit バレルシフタを inv の前シフトに、除算器 46bit。**結果: LUT 14,264（81 %）、BRAM 58/60、DSP 66/80、WNS +0.67 ns**。fe_eq 単体 2,801 LUT / BRAM 12 / DSP 41 |
 | 検証 | `rtl/isdbt_eq_tb.v` にモデルのビン（`fe_eq_model.py --vectors`）を流し `scripts/check_eq_sim.py` で D/CSI を許容差比較 → 実機は `tools/fe_eq_test.py`（モード 3 で δ 推定 → EQ_CTRL → モード 4 取り込み → ref/ 後段） |
 
+| 実機結果（2026-10-15 未明、`recovery/pluto-v0.39-isdbt-nano-v2b3b-eq3.frm` / eq3d.frm） | **ループバック（3 フレーム巡回刺激、C/N 30 dB）で FPGA 等化器 → ホスト ref/ 後段: MER A 29.5 / B 29.4 dB（ホスト全段等化 29.8 dB）、TS 一致は最長 2 フレーム連続で PASS**。886 窓/s、取りこぼしなし、T_est 9216.000、AFC ω ≈ 0.001 bin。eq3d（デバッグレジスタ付き）で δ を与えた再試験は MER 27.8 / 27.7 dB（差の原因は未調査）。**実波は未確認**: 直前の試験では 91 % のシンボルが「SP 位相の予測外れ → CSI 0」に落ち、検出位相が 3,0,0,1,2 の 5 周期パターンだった（SP エネルギーの 32bit 溢れを疑い >> 6 にしたが、録音でのオフライン検算では溢れていない）。その後アンテナ入力が全チャンネル RSSI ≈ 60 dB（雑音床）になり同期が取れず、切り分けは信号が戻ってから（eq3d の EQ_CTRL bit[15:14] で EQ_OMEGA に SP エネルギー／検出・予測を出せる） |
+| ホスト側の注意 | モード 3 で δ を推定するとき、取り込みが壊れている（連番欠け）と δ が −100 などになり以後が全滅する → `fe_eq_test.py` は |δ| ≥ 60 や連番欠け 25 % 超で止める。出力はビン順なので δ で np.roll してから後段へ |
 ## 4. 検証計画
 
 | 段階 | 合格基準 |
