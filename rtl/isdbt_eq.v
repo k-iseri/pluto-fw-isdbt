@@ -36,7 +36,8 @@ module isdbt_eq #(
   input       [3:0]       mode,            // 4 のとき動作
 
   input  signed [7:0]     int_cfo,         // δ
-  input       [7:0]       eq_flags,        // bit0 AFC 有効、bit1 CPE 有効、bit2 SP 位相固定、bit[5:4] 固定 SP 位相
+  input       [7:0]       eq_flags,        // bit0 AFC 有効、bit1 CPE 有効、bit2 SP 位相固定、bit3 予測外れでも受信中 SP を使う、
+                                           // bit[5:4] 固定 SP 位相、bit[7:6] デバッグ: EQ_OMEGA に 1 = {e0,e1}、2 = {e2,e3}（[25:10]）、3 = 検出/予測
 
   input       [31:0]      m_tdata,
   input       [23:0]      m_tuser,         // [23:16] blk_exp
@@ -52,7 +53,7 @@ module isdbt_eq #(
   output                  o_last,
 
   output reg  [1:0]       sp_phase,
-  output reg  signed [31:0] afc_omega,     // turns/シンボル
+  output      signed [31:0] afc_omega,     // turns/シンボル（eq_flags[7:6] ≠ 0 ならデバッグ値）
   output      [31:0]      dbg_word         // {state[3:0], sp_phase[1:0], sp_known, pending[0], overrun_cnt[7:0], cpe[7:0], sym_count[7:0]}
 );
   `include "isdbt_eq_tables.vh"
@@ -68,6 +69,9 @@ module isdbt_eq #(
   reg   [7:0]   cpe_dbg = 'd0;
   reg   [7:0]   overrun_cnt = 'd0;        // 前のシンボルの処理が終わる前に次の窓の受信が終わった回数
   reg   [1:0]   pending = 'd0;            // 受信済みで処理待ちの窓
+  reg   signed [31:0] afc_omega_r = 'd0;
+  reg   [1:0]   dbg_best = 'd0, dbg_pred = 'd0;
+  reg   [7:0]   dbg_mismatch = 'd0;
   reg           sp_known = 1'b0;
   assign dbg_word = {state, sp_phase, sp_known, pending[0], overrun_cnt, cpe_dbg, sym_count};
 
@@ -201,7 +205,7 @@ module isdbt_eq #(
 
   wire signed [11:0] in_i = m_tdata[11:0];
   wire signed [11:0] in_q = m_tdata[27:16];
-  wire [24:0] in_e = in_i * in_i + in_q * in_q;
+  wire [24:0] in_e = in_i * in_i + in_q * in_q;      // SP エネルギーは >> 6 で積算（実波のフルスケール近いビンで 32bit が溢れた）
 
   reg   [31:0]  rotA_sc = 'd0;
   reg   signed [11:0] rotA_i1 = 'd0, rotA_q1 = 'd0, rotA_i2 = 'd0, rotA_q2 = 'd0;
@@ -229,6 +233,9 @@ module isdbt_eq #(
   reg   [1:0]   a_sp_best = 2'd0;
   reg           a_known = 1'b0;          // このシンボルは受信中 SP パスを実行した
 
+  assign afc_omega = (eq_flags[7:6] == 2'd1) ? {sp_e0[25:10], sp_e1[25:10]} :
+                     (eq_flags[7:6] == 2'd2) ? {sp_e2[25:10], sp_e3[25:10]} :
+                     (eq_flags[7:6] == 2'd3) ? {dbg_best, dbg_pred, sp_pred, sp_known, a_known, 16'd0, dbg_mismatch} : afc_omega_r;
   wire signed [12:0] y3_i = sat13((rotA_pi + 29'sd16384) >>> 15);
   wire signed [12:0] y3_q = sat13((rotA_pq + 29'sd16384) >>> 15);
   wire signed [14:0] y3_i3 = y3_i * 3;
@@ -273,10 +280,10 @@ module isdbt_eq #(
         a_m <= (cur_car == 13'd8191) ? 9'd0 : ((cur_cm == 4'd11) ? cur_m + 1'b1 : cur_m);
         a_phase <= cur_phase + (a_first ? -({{11{hdr_delta[20]}}, hdr_delta[20:0]} << 11) : a_inc)
                    - ((a_bin == N / 2 - 1) ? (a_inc << 13) : 32'd0);
-        sp_e0 <= (a_first ? 32'd0 : sp_e0) + ((cur_is_grid && cur_pidx == 2'd0) ? {7'd0, in_e} : 32'd0);
-        sp_e1 <= (a_first ? 32'd0 : sp_e1) + ((cur_is_grid && cur_pidx == 2'd1) ? {7'd0, in_e} : 32'd0);
-        sp_e2 <= (a_first ? 32'd0 : sp_e2) + ((cur_is_grid && cur_pidx == 2'd2) ? {7'd0, in_e} : 32'd0);
-        sp_e3 <= (a_first ? 32'd0 : sp_e3) + ((cur_is_grid && cur_pidx == 2'd3) ? {7'd0, in_e} : 32'd0);
+        sp_e0 <= (a_first ? 32'd0 : sp_e0) + ((cur_is_grid && cur_pidx == 2'd0) ? {13'd0, in_e[24:6]} : 32'd0);
+        sp_e1 <= (a_first ? 32'd0 : sp_e1) + ((cur_is_grid && cur_pidx == 2'd1) ? {13'd0, in_e[24:6]} : 32'd0);
+        sp_e2 <= (a_first ? 32'd0 : sp_e2) + ((cur_is_grid && cur_pidx == 2'd2) ? {13'd0, in_e[24:6]} : 32'd0);
+        sp_e3 <= (a_first ? 32'd0 : sp_e3) + ((cur_is_grid && cur_pidx == 2'd3) ? {13'd0, in_e[24:6]} : 32'd0);
         a_car <= cur_car + 1'b1;
         a_cmod12 <= (cur_car == 13'd8191) ? 4'd0 : ((cur_cm == 4'd11) ? 4'd0 : cur_cm + 1'b1);
         a_bin <= a_bin + 1'b1;
@@ -436,7 +443,8 @@ module isdbt_eq #(
     if (rst || !enable) begin
       state <= S_IDLE;
       afc_phase <= 'd0;
-      afc_omega <= 'd0;
+      afc_omega_r <= 'd0;
+      dbg_mismatch <= 'd0;
       cpe_phase <= 'd0;
       sp_phase <= 'd0;
       sp_pred <= 'd0;
@@ -454,7 +462,9 @@ module isdbt_eq #(
       // 受信完了: 次の受信のための位相予測を更新し、処理待ちに積む（IDLE で同時に取り込むなら増やさない）
       if (a_done) begin
         sp_pred <= eq_flags[2] ? eq_flags[5:4] + 1'b1 : a_sp_best + 1'b1;
-        sp_known <= eq_flags[2] ? 1'b1 : (a_known ? (a_sp_best == sp_pred) : 1'b1);
+        sp_known <= (eq_flags[2] || eq_flags[3]) ? 1'b1 : (a_known ? (a_sp_best == sp_pred) : 1'b1);
+        dbg_best <= a_sp_best; dbg_pred <= sp_pred;
+        if (a_known && a_sp_best != sp_pred) dbg_mismatch <= dbg_mismatch + 1'b1;
         if (state != S_IDLE) begin
           overrun_cnt <= overrun_cnt + 1'b1;
           pending <= (pending == 2'd3) ? 2'd3 : pending + 1'b1;
@@ -471,7 +481,7 @@ module isdbt_eq #(
             sp_b <= eq_flags[2] ? eq_flags[5:4] : a_sp_best;
             sp_phase <= eq_flags[2] ? eq_flags[5:4] : a_sp_best;
             bacc_re <= acc_re; bacc_im <= acc_im; bacc_hh <= acc_hh; bacc_h4 <= acc_h4;
-            if (!a_known || (!eq_flags[2] && a_sp_best != sp_pred)) begin
+            if (!a_known || (!eq_flags[2] && !eq_flags[3] && a_sp_best != sp_pred)) begin
               // 受信中 SP パスが無効（位相未知、または予測外れ）: 積算を空にして CSI = 0（消失）で出す。
               // 履歴のこのシンボルのスロットは古いままになるが、立ち上がり／同期外れ時だけ
               bacc_re <= 'd0; bacc_im <= 'd0; bacc_hh <= 'd0; bacc_h4 <= 'd0;
@@ -488,15 +498,15 @@ module isdbt_eq #(
               norm_is_cpe <= 1'b0;
               state <= S_NORM;
             end else begin
-              afc_phase <= afc_phase + afc_omega;
+              afc_phase <= afc_phase + afc_omega_r;
               state <= S_CPE_ISSUE;
             end
           end
         end
         S_AFC_WAIT: begin
           if (ph_valid) begin
-            afc_omega <= afc_omega + ($signed(ph_meas) >>> 4);
-            afc_phase <= afc_phase + afc_omega + ($signed(ph_meas) >>> 4);   // 次の受信（2,048 サイクル後）までに進める
+            afc_omega_r <= afc_omega_r + ($signed(ph_meas) >>> 4);
+            afc_phase <= afc_phase + afc_omega_r + ($signed(ph_meas) >>> 4);   // 次の受信（2,048 サイクル後）までに進める
             state <= S_CPE_ISSUE;
           end
         end
@@ -518,7 +528,7 @@ module isdbt_eq #(
               div_rem <= 'd0; div_q <= 'd0; div_cnt <= 'd0;
               state <= S_DIV;
             end else begin
-              afc_phase <= afc_phase + afc_omega;
+              afc_phase <= afc_phase + afc_omega_r;
               state <= S_CPE_ISSUE;
             end
           end else begin
