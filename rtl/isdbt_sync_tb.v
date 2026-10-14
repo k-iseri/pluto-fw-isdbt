@@ -9,6 +9,7 @@
 
 module isdbt_sync_tb;
   localparam N = 8192, NG = 1024, T = 9216;
+  parameter MODE = 2;              // 2 = 16bit ビン、3 = 8bit ビン
   reg clk = 0; always #5 clk = ~clk;
   reg rst = 1, enable = 0;
   reg adc_valid = 0;
@@ -28,7 +29,7 @@ module isdbt_sync_tb;
   wire [31:0] nco_phase; wire start_valid; wire [31:0] start_pos; wire locked;
   wire signed [31:0] cfo_inc; wire [31:0] peak_mag2; wire [15:0] lock_losses; wire [31:0] status_word;
   isdbt_sync #(.N(N), .NG(NG), .T(T)) sync (
-    .clk(clk), .rst(rst), .mode({2'd0, enable, 1'b0}), .margin(16'd128),
+    .clk(clk), .rst(rst), .mode((enable ? MODE[3:0] : 4'd0)), .margin(16'd128),
     .c_valid(c_valid), .c_re(c_re), .c_im(c_im), .c_mag2(c_mag2), .c_idx(c_idx),
     .raw_valid(adc_valid), .nco_phase(nco_phase),
     .start_valid(start_valid), .start_pos(start_pos),
@@ -36,14 +37,14 @@ module isdbt_sync_tb;
 
   wire r_valid; wire signed [15:0] r_i, r_q; wire [31:0] r_idx;
   isdbt_rotate rot (
-    .clk(clk), .mode({2'd0, enable, 1'b0}), .valid_in(adc_valid), .x_in(adc_i), .y_in(adc_q), .phase_in(nco_phase), .idx_in(sample_count[31:0]),
+    .clk(clk), .mode((enable ? MODE[3:0] : 4'd0)), .valid_in(adc_valid), .x_in(adc_i), .y_in(adc_q), .phase_in(nco_phase), .idx_in(sample_count[31:0]),
     .valid_out(r_valid), .x_out(r_i), .y_out(r_q), .idx_out(r_idx));
 
   wire [7:0] cfg_tdata; wire cfg_tvalid; reg cfg_tready = 1;
   wire [31:0] s_tdata; wire s_tvalid, s_tlast; wire s_tready = 1'b1;
   wire hdr_pop; wire [63:0] hdr_start; wire [31:0] hdr_seq; wire hdr_valid; wire [15:0] overrun;
   isdbt_fe_win #(.N(N)) win (
-    .clk(clk), .rst(rst), .mode({2'd0, enable, 1'b0}), .stride(16'd0), .offset(16'd0), .decim(8'd1),
+    .clk(clk), .rst(rst), .mode((enable ? MODE[3:0] : 4'd0)), .stride(16'd0), .offset(16'd0), .decim(8'd1),
     .sample_count({32'd0, r_idx}), .adc_valid(r_valid), .adc_i(r_i), .adc_q(r_q),
     .start_valid(start_valid), .start_pos(start_pos),
     .cfg_tdata(cfg_tdata), .cfg_tvalid(cfg_tvalid), .cfg_tready(cfg_tready),
@@ -60,7 +61,7 @@ module isdbt_sync_tb;
 
   wire dma_en; wire [31:0] dma_data; wire [15:0] fovf; wire [31:0] frames;
   isdbt_fe_out #(.N(N), .FIFO_DEPTH(16384)) outp (
-    .clk(clk), .rst(rst), .mode({2'd0, enable, 1'b0}),
+    .clk(clk), .rst(rst), .mode((enable ? MODE[3:0] : 4'd0)),
     .m_tdata(m_tdata), .m_tuser(24'd0), .m_tvalid(m_tvalid), .m_tlast(m_tlast),
     .hdr_start(hdr_start), .hdr_seq(hdr_seq), .hdr_valid(hdr_valid), .hdr_pop(hdr_pop),
     .info_a(cfo_inc), .info_b(status_word),

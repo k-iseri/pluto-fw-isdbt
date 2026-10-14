@@ -114,7 +114,7 @@ module isdbt_rotate #(
   reg               bmode [0:ITER];
   integer kb;
   always @(posedge clk) begin
-    bx[0] <= x_in; by[0] <= y_in; bmode[0] <= (mode == 4'd2);
+    bx[0] <= x_in; by[0] <= y_in; bmode[0] <= (mode == 4'd2) || (mode == 4'd3);
     for (kb = 0; kb < ITER; kb = kb + 1) begin bx[kb + 1] <= bx[kb]; by[kb + 1] <= by[kb]; bmode[kb + 1] <= bmode[kb]; end
   end
   reg signed [31:0] z [0:ITER];   // 残り回転角（符号付き）

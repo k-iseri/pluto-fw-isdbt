@@ -62,7 +62,7 @@ module isdbt_fe_win #(
 );
 
   wire enable = (mode != 4'd0);
-  wire sync_mode = (mode == 4'd2);
+  wire sync_mode = (mode == 4'd2) || (mode == 4'd3);   // 2 = 同期 FFT 16bit、3 = 同期 FFT 8bit
 
   // ---- FFT 設定 ----
   reg cfg_done = 1'b0;

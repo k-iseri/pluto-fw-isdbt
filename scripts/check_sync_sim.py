@@ -44,12 +44,16 @@ print(f"cfo_inc: last {inc_last}, expected {inc_expect:.0f} (frac {frac:.4f} bin
 w = np.array([int(l, 16) for l in (d / "sync_out.txt").read_text().split()], dtype=np.uint32) if (d / "sync_out.txt").exists() else np.array([], dtype=np.uint32)
 hdrs = []
 i = 0
-while i + 8 + N <= len(w):
+while i + 8 <= len(w):
     if w[i] != 0x49534254:
         i += 1
         continue
+    fmt8 = (int(w[i + 1]) >> 24) & 1
+    nw = N // 2 if fmt8 else N
+    if i + 8 + nw > len(w):
+        break
     hdrs.append((int(w[i + 2]) | (int(w[i + 3]) << 32), int(w[i + 4]), int(np.int32(w[i + 6])), int(w[i + 7])))
-    i += 8 + N
+    i += 8 + nw
 print(f"dma frames {len(hdrs)}; first {hdrs[:3]}")
 ok = (len(ev) >= 0.8 * len(truth) and errs.min() > -200 and errs.max() < 60 and errs[5:].std() < 8
       and abs(-inc_last * N / 2 ** 32 - frac) < 0.02 and ev[-1, 1] == 1)

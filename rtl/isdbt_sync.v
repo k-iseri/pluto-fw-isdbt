@@ -49,7 +49,7 @@ module isdbt_sync #(
   output reg  [15:0]      lock_losses,
   output      [31:0]      status_word      // ヘッダ w7 用: {lock_losses[14:0], locked, peak_mag2[31:16]}
 );
-  wire enable = (mode == 4'd2);
+  wire enable = (mode == 4'd2) || (mode == 4'd3);
   assign status_word = {lock_losses[14:0], locked, peak_mag2[31:16]};
 
   localparam S_ACQ = 2'd0, S_TRACK = 2'd1;

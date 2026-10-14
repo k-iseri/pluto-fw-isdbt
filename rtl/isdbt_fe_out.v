@@ -7,7 +7,8 @@
 //
 // 出力フォーマット（32bit リトルエンディアンのワード列、1 窓 = 8 + N ワード）:
 //   w0  0x49534254 ("ISBT")
-//   w1  {8'd0, blk_exp[7:0], flags[7:0], mode[7:0]}   flags: bit0 = FIFO あふれで途中が欠けた
+//   w1  {fmt[7:0], blk_exp[7:0], flags[7:0], mode[7:0]}   flags: bit0 = FIFO あふれで途中が欠けた
+//       fmt: 0 = ビンは {Q16, I16} 1 ワード、1 = 8bit（12bit を丸めて 8bit、{Q8_1, I8_1, Q8_0, I8_0} = 2 ビン/ワード、N/2 ワード）
 //   w2  窓開始サンプルカウンタ下位 32bit
 //   w3  同上位 32bit
 //   w4  窓の連番
@@ -54,6 +55,16 @@ module isdbt_fe_out #(
 );
 
   wire enable = (mode != 4'd0);
+  wire pack8 = (mode == 4'd3);        // ビンを 8bit × 2 で出す（モード 3）
+  // 12bit（FFT_W）→ 8bit: 丸めて飽和
+  function [7:0] to8;
+    input signed [15:0] v;
+    reg signed [15:0] r;
+    begin
+      r = (v + (1 << (FFT_W - 9))) >>> (FFT_W - 8);
+      to8 = (r > 127) ? 8'd127 : (r < -128) ? 8'h80 : r[7:0];
+    end
+  endfunction
 
   // ---- 入力スキッド FIFO（分散 RAM、深さ 32）----
   reg   [32:0]  sk_mem [0:31];          // {last, data}
@@ -108,7 +119,7 @@ module isdbt_fe_out #(
   always @(*) begin
     case (hdr_idx)
       4'd0: hdr_word = 32'h49534254;
-      4'd1: hdr_word = {8'd0, cur_exp, 7'd0, dropped, 4'd0, mode};
+      4'd1: hdr_word = {7'd0, pack8, cur_exp, 7'd0, dropped, 4'd0, mode};
       4'd2: hdr_word = cur_start[31:0];
       4'd3: hdr_word = cur_start[63:32];
       4'd4: hdr_word = cur_seq;
@@ -120,6 +131,9 @@ module isdbt_fe_out #(
   end
 
   wire  sk_last = sk_q[32];
+  reg   [15:0]  pk_lo = 'd0;          // 8bit パッキングの前半ビン
+  reg           pk_half = 1'b0;
+  wire  [15:0]  pk_cur = {to8(sk_q[31:16]), to8(sk_q[15:0])};
   always @(posedge clk) begin
     hdr_pop <= 1'b0;
     if (rst || !enable) begin
@@ -154,15 +168,22 @@ module isdbt_fe_out #(
       end
       hdr_idx <= hdr_idx + 1'b1;
     end else if (!sk_empty) begin
-      if (!f_full) begin
-        fifo_mem[f_wr[AW-1:0]] <= sk_q[31:0];
-        f_wr <= f_wr + 1'b1;
+      if (pack8 && !pk_half && !sk_last) begin
+        pk_lo <= pk_cur;                // 前半ビンを保持
+        pk_half <= 1'b1;
       end else begin
-        dropped <= 1'b1;
+        if (!f_full) begin
+          fifo_mem[f_wr[AW-1:0]] <= pack8 ? (pk_half ? {pk_cur, pk_lo} : {16'd0, pk_cur}) : sk_q[31:0];
+          f_wr <= f_wr + 1'b1;
+        end else begin
+          dropped <= 1'b1;
+        end
+        pk_half <= 1'b0;
       end
       sk_rd <= sk_rd + 1'b1;
       if (sk_last) begin
         in_frame <= 1'b0;
+        pk_half <= 1'b0;
         frames_out <= frames_out + 1'b1;
         if (dropped) fifo_overflow_count <= fifo_overflow_count + 1'b1;
       end
