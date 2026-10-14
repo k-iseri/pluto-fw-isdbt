@@ -184,6 +184,18 @@ BonDriver は `[SDR] FpgaEq=auto|0|1`、isdbtd は `--fpga-eq`。
 いた。`rtl/isdbt_level.v`（pack8 後の 8bit I/Q の I²+Q² を 65536 サンプル積算、≈ 8 ms 更新）をレジスタ 0x54 ADC_LEVEL に出し
 （VERSION 4、CAPS bit4 = 0x1F）、ホストは約 1 秒ごとに読んで raw と同じ dBFS 定義（PACK_SHIFT で換算）で同じ AGC を回す。
 
+eq7（`recovery/pluto-v0.39-isdbt-nano-v2b3c-eq7.frm`、WNS +0.54 ns）で実機確認: `fe_eq_test.py` が adc level −23.9 dBFS
+（ゲイン 26）を読み、isdbtd `--agc-target -30` でモード 4 のままゲイン 25 → 19、rx_level −30.6 dBFS に追従。
+
+**弱い信号で FPGA の同期が窓を欠かす（eq7 まで）**: AGC 目標 −30 dBFS では同期が 882 窓/s のうち約 90 しか出せず
+TS が出ない一方、raw ホスト復調は同じレベルで MER 23 dB でロックした。`isdbt_gi_corr` が相関値を >> 12 してから 16bit で
+二乗しており、8bit で rms 4 の入力（−30 dBFS）では c >> 12 ≈ 8 になってピーク比較・周期性判定・atan2 が整数の粗さで
+崩れていた。|c| < 2^25 なので >> 10（mag2 ≤ 2^31）にし、`isdbt_sync` の atan2 入力も同じスケールに。同期 tb PASS。
+eq8（`recovery/pluto-v0.39-isdbt-nano-v2b3c-eq8.frm`、WNS +0.87 ns）: −30 dBFS で 882 窓/s・ロック・訂正不能 0、
+MER A 18.5 / B 19.4 dB（−24 dBFS では A 25.6 / B 23.0 で変化なし）。**同じ −30 dBFS で raw ホストは 22.9 / 23.1 dB なので
+FPGA 経路は低レベルで約 4 dB 余分に落ちる**（未解明。FFT 入力は 12bit で BFP なので量子化ではなく、等化器の固定小数点か
+同期の CFO/タイミング精度）。−36 dBFS は両経路とも対象外（FPGA: 窓 0）。
+
 **eq6 ファーム（`recovery/pluto-v0.39-isdbt-nano-v2b3c-eq6.frm`、WNS +1.21 ns、LUT/BRAM/DSP は eq5 と同等）の実機結果（06:00）**:
 isdbtd で 24 → 22 → 24 と選局して 3 回とも再試行なしで δ = 9 を得てモード 4 に入った（eq5 では 1〜4 回の再試行）。
 同時刻の MER は FPGA 経路 A 17〜21 / B 19〜21 dB、raw ホスト復調 A 24 / B 24.6 dB で、eq5 に戻しても A 20.8 / B 20.8 dB
