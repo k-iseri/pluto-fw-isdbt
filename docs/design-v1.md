@@ -198,4 +198,28 @@ linux パッチ = GPL-2.0 / hdl 改変 = ADI デュアル。
   DMA 以降は不透明なバイト列なので影響はカーネル申告の storagebits だけ。
 - クローン機の個体差（V7）: 段階 0 で検出する。純正 fw が動いている以上リスクは低い。
 - Vivado 2023.2 のタイミングクロージャ: RX 専用化で制約は軽くなる方向。
+
+## 8. 実装状況と設計からの変更点（2026-10-14）
+
+前提が変わった点: 対象基板は公式 Pluto と**ピン配置が完全に別**（clg400）で XDC が無かったので、
+先に JTAG バウンダリスキャンで実測した（pinout-nano.md）。HDL プロジェクトは hdl フォーク
+`projects/pluto_nano`（= 公式 pluto の BD + 実測 XDC）。以下はそれを起点にした v1 の実装。
+
+| 項目 | 設計メモ | 実装 | 理由 |
+|---|---|---|---|
+| 8bit 量子化 | 3.2 案 a（cpack `SAMPLE_DATA_WIDTH=8`、pack8 は 16→8 変換だけ） | **そのとおり**。`rtl/pack8.v`（組み合わせ回路、round half away from zero + 飽和、xsim で全 65536 入力を検証）を BD の 4 レーン（fir_decimator 出力 ×2、adc_data_i1/q1）と cpack の間に挿入。adc_dma の `DMA_DATA_WIDTH_SRC` を 64 → 32 | — |
+| 前置ゲイン | なし | pack8 のシフトを **3**（12bit [10:3]、+6 dB）。ADC −6 dBFS 以上で飽和するが、ソフト AGC の目標 −24 dBFS に OFDM のピーク +12 dB を足しても −12 dBFS で余裕がある | シフト 4 だと目標 −24 dBFS で 8bit の SQNR が約 29 dB しかなく MER が 25 → 23 dB に落ちた（実測）。+6 dB で量子化雑音を 6 dB 下げる |
+| カーネル申告 | 3.2 の第一案（`AIM_CHAN` マクロの storagebits を 8 に固定するパッチ） | **方式 B を採用**: axi_ad9361 コアに `USR_DATATYPE_TOTAL_BITS / USR_DATATYPE_BITS` パラメータを足して `CHAN_USR_CNTRL_1` の申告を 8/8 にし、cf_axi_adc の `axiadc_channel_setup()` が固定チャネルでもこのレジスタを読んで申告が表と違えば従う（1 パッチ 28 行、GPL-2.0、linux フォーク isdbt ブランチ 8a62d50）。純正コアは 16/16 を申告するので挙動不変 | 「FPGA が正、カーネルは読むだけ」になり、純正 PL でも同じカーネルが使える。パッチも小さい |
+| サンプルカウンタ | 3.3 独立 AXI-Lite ブロックを lpc 窓の空きに置く | **axi_ad9361 コア内の未使用アドレス（バイト 0x3000、ワード 0x0C00）に `isdbt_sample_counter.v` を組み込む**（`ISDBT_COUNTER_ENABLE` パラメータ、既定 0）。dts 窓 0x6000 の内側なので **カーネル・dts 変更ゼロ**で `iio_device_reg_read(0x80003000+off)` から読める | 独立ブロックは interconnect の 64KB 粒度で lpc 窓に同居できない。コア内なら OR 束ねに 1 項足すだけ |
+| カウンタの内容 | 64bit サンプルカウンタ + overflow 回数 | 同左に加えて **DROP_CNT（adc_dovf が立っていたクロック数 = 捨てられた DMA ビート数）** と **FORMAT（pack8 のシフト量）**。ホストは DROP_CNT × 2 を捨てられた複素サンプル数として報告し、FORMAT でスケールを決める | サンプルカウンタと受信数の差はデバイス側バッファ量（最大 4 ブロック ≈ 4M サンプル）で揺れて定量化に使えない。axi_dmac は受け取れないビートごとに fifo_wr_overflow を 1 クロック立てる（src_fifo_inf.v）ので、それを数えるのが実体 |
+| RX 専用化（TX 削除） | 3.1 | **未実施（保留）** | 7010 でも公式設計が余裕で収まりタイミングも通る。TX を消すと ad9361 ドライバのデジタル I/F チューニング（TX→RX ループバックを使う）を skip モードに変える必要があり、得るものに対して手間とリスクが見合わない。必要になったら段階 1 として再検討 |
+| ホスト側 | 3.2 のタスク | isdbt-sdr ブランチ `fw-8bit`: `SdrSource` が申告（サンプルサイズ 2/4）で int8/int16 を切替、Fs 未指定なら 8bit = 公称 / 16bit = 7/8 を自動選択（`ProbeSampleBytes`）、カウンタブロックの MAGIC を見て `hw_dropped` / `hw_ovf_events` を status に追加 | main には混ぜない（ユーザー指示） |
+
+実機の結果（基板 HamGeek PlutoSDR Nano、物理 24ch）:
+
+| 版 | PL | 結果 |
+|---|---|---|
+| r1 | 公式設計 + 実測 XDC（16bit） | ad9361 初期化 OK、MER 25 dB / 17 Mbps / bad 0 |
+| r2 | + pack8（シフト 4）+ 8bit 申告 + カーネルパッチ | `le:S8/8` を申告、ホスト自動適応、公称 8.127 MSPS で MER 23 dB / bad 0 |
+| r3 | + サンプルカウンタ + 前置ゲイン（シフト 3） | MAGIC/VERSION/FORMAT=3 読み出し OK、CNT・DROP_CNT が動作。飽和試験（ホストが 20 MSPS を指定、8bit で 40 MB/s > USB 2.0）: 到着 15.83 MSPS に対し DROP_CNT×2 = 4.1M サンプル/s で差分と一致（定量化の検証）。OVF_CNT はビートごとに立つパルスを数えるので DROP_CNT と同値になる（バースト回数ではない）。公称 8.127 MSPS（rx_rate 8,126,756）で **MER 24.5〜25.8 dB**（16bit と同等に回復）、hw_dropped 0 / hw_ovf_events 0 / bad 0、AGC は −24 dBFS・26 dB（16bit 時と同じ値 = スケール申告が正しい） |
 - 7010 の資源: v1 の追加分（pack8 + counter）は数百 LUT 規模で問題なし。
