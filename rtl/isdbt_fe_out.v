@@ -28,8 +28,7 @@ module isdbt_fe_out #(
 ) (
   input                   clk,
   input                   rst,
-  input                   enable,
-  input       [3:0]       mode,
+  input       [3:0]       mode,            // 0 = 停止
 
   // FFT 出力
   input       [31:0]      m_tdata,
@@ -42,6 +41,9 @@ module isdbt_fe_out #(
   input       [31:0]      hdr_seq,
   input                   hdr_valid,
   output reg              hdr_pop,
+  // ヘッダ w6 / w7 に入れる付加情報（窓の先頭でラッチ。同期モードでは CFO 増分とロック状態）
+  input       [31:0]      info_a,
+  input       [31:0]      info_b,
 
   // DMA へ
   output reg              dma_wr_en,
@@ -49,6 +51,8 @@ module isdbt_fe_out #(
   output reg  [15:0]      fifo_overflow_count,
   output reg  [31:0]      frames_out
 );
+
+  wire enable = (mode != 4'd0);
 
   // ---- 入力スキッド FIFO（分散 RAM、深さ 32）----
   reg   [32:0]  sk_mem [0:31];          // {last, data}
@@ -92,6 +96,7 @@ module isdbt_fe_out #(
   reg   [63:0]  cur_start = 'd0;
   reg   [31:0]  cur_seq = 'd0;
   reg   [7:0]   cur_exp = 'd0;
+  reg   [31:0]  cur_a = 'd0, cur_b = 'd0;
   reg   [31:0]  hdr_word;
 
   always @(*) begin
@@ -102,6 +107,8 @@ module isdbt_fe_out #(
       4'd3: hdr_word = cur_start[63:32];
       4'd4: hdr_word = cur_seq;
       4'd5: hdr_word = N;
+      4'd6: hdr_word = cur_a;
+      4'd7: hdr_word = cur_b;
       default: hdr_word = 32'd0;
     endcase
   end
@@ -123,6 +130,8 @@ module isdbt_fe_out #(
       if (!sk_empty && hdr_valid && (exp_wr != exp_rd)) begin
         cur_start <= hdr_start;
         cur_seq <= hdr_seq;
+        cur_a <= info_a;
+        cur_b <= info_b;
         cur_exp <= exp_fifo[exp_rd[1:0]];
         exp_rd <= exp_rd + 1'b1;
         hdr_pop <= 1'b1;

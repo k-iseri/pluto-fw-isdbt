@@ -26,15 +26,19 @@ module isdbt_fe_win #(
 ) (
   input                   clk,
   input                   rst,
-  input                   enable,
+  input       [3:0]       mode,            // 0 = 停止（raw I/Q）、1 = FFT テスト（offset + k*stride）、2 = 同期（isdbt_sync の start_*）
   input       [15:0]      stride,
   input       [15:0]      offset,
   input       [7:0]       decim,
-  input       [63:0]      sample_count,
+  input       [63:0]      sample_count,    // adc_valid のサンプルに対応するサンプル番号（同じ遅延で揃っていること）
 
   input                   adc_valid,
   input       [15:0]      adc_i,
   input       [15:0]      adc_q,
+
+  // isdbt_sync からの窓開始要求（sync_mode）。FIFO 4 段
+  input                   start_valid,
+  input       [31:0]      start_pos,
 
   // FFT 設定（forward のみ）
   output reg  [7:0]       cfg_tdata,
@@ -55,6 +59,9 @@ module isdbt_fe_win #(
 
   output reg  [15:0]      overrun_count
 );
+
+  wire enable = (mode != 4'd0);
+  wire sync_mode = (mode == 4'd2);
 
   // ---- FFT 設定 ----
   reg cfg_done = 1'b0;
@@ -94,6 +101,21 @@ module isdbt_fe_win #(
 
   wire emit_this = (decim_cnt == 8'd0);
 
+  // ---- 窓開始要求 FIFO（sync_mode）----
+  reg   [31:0]  st_mem [0:3];
+  reg   [2:0]   st_wr = 'd0, st_rd = 'd0;
+  wire          st_empty = (st_wr == st_rd);
+  wire  [31:0]  st_head = st_mem[st_rd[1:0]];
+  always @(posedge clk) begin
+    if (rst || !enable) begin
+      st_wr <= 'd0;
+    end else if (start_valid && ((st_wr - st_rd) != 3'd4)) begin
+      st_mem[st_wr[1:0]] <= start_pos;
+      st_wr <= st_wr + 1'b1;
+    end
+  end
+  wire start_hit = sync_mode ? (!st_empty && (sample_count[31:0] == st_head)) : (pos == next_start);
+
   // ---- サンプル FIFO（窓エンジン → FFT、tready を守る）----
   localparam SF_AW = 5;                       // 深さ 32
   reg   [32:0]  sf_mem [0:(1<<SF_AW)-1];      // {last, q, i}
@@ -127,7 +149,10 @@ module isdbt_fe_win #(
       hf_rd <= 'd0;
       win_bad <= 1'b0;
       sf_wr <= 'd0;
+      st_rd <= 'd0;
     end else begin
+      // sync_mode: 窓の途中で来た（遅れた）開始要求は捨てる
+      if (sync_mode && !st_empty && adc_valid && (in_win != 0) && ($signed(sample_count[31:0] - st_head) > 0)) st_rd <= st_rd + 1'b1;
       if (hdr_pop && !hf_empty) hf_rd <= hf_rd + 1'b1;
       sf_push = 1'b0;
       sf_din = {1'b0, adc_q, adc_i};
@@ -141,8 +166,9 @@ module isdbt_fe_win #(
           if (in_win == 14'd1) begin
             if (win_bad || sf_full) overrun_count <= overrun_count + 1'b1;
           end
-        end else if (pos == next_start) begin
+        end else if (start_hit) begin
           next_start <= next_start + {16'd0, stride};
+          if (sync_mode) st_rd <= st_rd + 1'b1;
           if (emit_this && cfg_done) begin
             // 窓の先頭: ヘッダを積んで最初のサンプルを出す
             sf_push = 1'b1;

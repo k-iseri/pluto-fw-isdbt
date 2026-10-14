@@ -26,8 +26,9 @@ module isdbt_fe_xfft_tb;
   wire ev_fs, ev_tlu, ev_tlm, ev_halt;
 
   isdbt_fe_win #(.N(N)) win (
-    .clk(clk), .rst(rst), .enable(enable), .stride(stride), .offset(offset), .decim(decim),
+    .clk(clk), .rst(rst), .mode({3'd0, enable}), .stride(stride), .offset(offset), .decim(decim),
     .sample_count(sample_count), .adc_valid(adc_valid), .adc_i(adc_i), .adc_q(adc_q),
+    .start_valid(1'b0), .start_pos(32'd0),
     .cfg_tdata(cfg_tdata), .cfg_tvalid(cfg_tvalid), .cfg_tready(cfg_tready),
     .s_tdata(s_tdata), .s_tvalid(s_tvalid), .s_tlast(s_tlast), .s_tready(s_tready),
     .hdr_pop(hdr_pop), .hdr_start(hdr_start), .hdr_seq(hdr_seq), .hdr_valid(hdr_valid),
@@ -43,9 +44,10 @@ module isdbt_fe_xfft_tb;
 
   wire dma_en; wire [31:0] dma_data; wire [15:0] fovf; wire [31:0] frames;
   isdbt_fe_out #(.N(N), .FIFO_DEPTH(16384)) outp (
-    .clk(clk), .rst(rst), .enable(enable), .mode(4'd1),
+    .clk(clk), .rst(rst), .mode({3'd0, enable}),
     .m_tdata(m_tdata), .m_tuser(m_tuser), .m_tvalid(m_tvalid), .m_tlast(m_tlast),
     .hdr_start(hdr_start), .hdr_seq(hdr_seq), .hdr_valid(hdr_valid), .hdr_pop(hdr_pop),
+    .info_a(32'd0), .info_b(32'd0),
     .dma_wr_en(dma_en), .dma_wr_data(dma_data), .fifo_overflow_count(fovf), .frames_out(frames));
 
   // 入力列: LFSR 風の 12bit 値。t ごとの値をファイルへ
