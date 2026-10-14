@@ -9,8 +9,8 @@ set_property -dict [list \
   CONFIG.transform_length 8192 \
   CONFIG.implementation_options pipelined_streaming_io \
   CONFIG.data_format fixed_point \
-  CONFIG.input_width 16 \
-  CONFIG.phase_factor_width 16 \
+  CONFIG.input_width 12 \
+  CONFIG.phase_factor_width 12 \
   CONFIG.scaling_options block_floating_point \
   CONFIG.rounding_modes convergent_rounding \
   CONFIG.output_ordering natural_order \
@@ -18,7 +18,7 @@ set_property -dict [list \
   CONFIG.xk_index true \
   CONFIG.aresetn true] [get_ips xfft_8192]
 generate_target {instantiation_template simulation} [get_ips xfft_8192]
-add_files -norecurse [list $rtl/isdbt_fe_win.v $rtl/isdbt_fe_out.v $rtl/isdbt_fe_xfft_tb.v]
+add_files -norecurse [list $rtl/isdbt_cordic.v $rtl/isdbt_fe_win.v $rtl/isdbt_fe_out.v $rtl/isdbt_fe_xfft_tb.v]
 set_property top isdbt_fe_xfft_tb [get_filesets sim_1]
 set_property -name {xsim.simulate.runtime} -value {all} -objects [get_filesets sim_1]
 launch_simulation

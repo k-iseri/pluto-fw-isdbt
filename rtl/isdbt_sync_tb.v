@@ -34,9 +34,9 @@ module isdbt_sync_tb;
     .start_valid(start_valid), .start_pos(start_pos),
     .locked(locked), .cfo_inc(cfo_inc), .peak_mag2(peak_mag2), .lock_losses(lock_losses), .status_word(status_word));
 
-  wire r_valid; wire signed [15:0] r_i, r_q; wire [63:0] r_idx;
+  wire r_valid; wire signed [15:0] r_i, r_q; wire [31:0] r_idx;
   isdbt_rotate rot (
-    .clk(clk), .valid_in(adc_valid), .x_in(adc_i), .y_in(adc_q), .phase_in(nco_phase), .idx_in(sample_count),
+    .clk(clk), .mode({2'd0, enable, 1'b0}), .valid_in(adc_valid), .x_in(adc_i), .y_in(adc_q), .phase_in(nco_phase), .idx_in(sample_count[31:0]),
     .valid_out(r_valid), .x_out(r_i), .y_out(r_q), .idx_out(r_idx));
 
   wire [7:0] cfg_tdata; wire cfg_tvalid; reg cfg_tready = 1;
@@ -44,7 +44,7 @@ module isdbt_sync_tb;
   wire hdr_pop; wire [63:0] hdr_start; wire [31:0] hdr_seq; wire hdr_valid; wire [15:0] overrun;
   isdbt_fe_win #(.N(N)) win (
     .clk(clk), .rst(rst), .mode({2'd0, enable, 1'b0}), .stride(16'd0), .offset(16'd0), .decim(8'd1),
-    .sample_count(r_idx), .adc_valid(r_valid), .adc_i(r_i), .adc_q(r_q),
+    .sample_count({32'd0, r_idx}), .adc_valid(r_valid), .adc_i(r_i), .adc_q(r_q),
     .start_valid(start_valid), .start_pos(start_pos),
     .cfg_tdata(cfg_tdata), .cfg_tvalid(cfg_tvalid), .cfg_tready(cfg_tready),
     .s_tdata(s_tdata), .s_tvalid(s_tvalid), .s_tlast(s_tlast), .s_tready(s_tready),

@@ -24,7 +24,8 @@
 module isdbt_fe_out #(
   parameter N = 8192,
   parameter FIFO_DEPTH = 16384,        // 2 窓分
-  parameter EXP_LSB = 16               // m_tuser の blk_exp の位置（XK_INDEX 13bit → 16bit 境界の次）
+  parameter EXP_LSB = 16,              // m_tuser の blk_exp の位置（XK_INDEX 13bit → 16bit 境界の次）
+  parameter FFT_W = 12                 // FFT のデータ幅。16 未満なら各成分を 16bit に符号拡張して出す
 ) (
   input                   clk,
   input                   rst,
@@ -64,13 +65,18 @@ module isdbt_fe_out #(
   reg   [7:0]   exp_fifo [0:3];
   reg   [2:0]   exp_wr = 'd0, exp_rd = 'd0;
 
+  // FFT 出力の各成分を 16bit に符号拡張（IP の上位パディングは当てにしない）
+  wire signed [15:0] m_i = $signed(m_tdata[FFT_W-1:0]);
+  wire signed [15:0] m_q = $signed(m_tdata[16+FFT_W-1:16]);
+  wire [31:0] m_tdata_sx = {m_q, m_i};
+
   always @(posedge clk) begin
     if (rst) begin
       sk_wr <= 'd0;
       frame_first <= 1'b1;
       exp_wr <= 'd0;
     end else if (m_tvalid) begin
-      sk_mem[sk_wr[4:0]] <= {m_tlast, m_tdata};
+      sk_mem[sk_wr[4:0]] <= {m_tlast, m_tdata_sx};
       sk_wr <= sk_wr + 1'b1;
       if (frame_first) begin
         exp_fifo[exp_wr[1:0]] <= m_tuser[EXP_LSB +: 8];

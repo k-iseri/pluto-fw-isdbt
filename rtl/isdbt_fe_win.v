@@ -22,7 +22,8 @@
 
 module isdbt_fe_win #(
   parameter N = 8192,
-  parameter HDR_DEPTH = 4          // ヘッダ FIFO の深さ（FFT の滞留フレーム数 + 1）
+  parameter HDR_DEPTH = 4,         // ヘッダ FIFO の深さ（FFT の滞留フレーム数 + 1）
+  parameter FFT_W = 12             // FFT 入力のデータ幅（16bit 入力をこの幅に飽和させて渡す）
 ) (
   input                   clk,
   input                   rst,
@@ -137,6 +138,16 @@ module isdbt_fe_win #(
     end
   end
 
+  // FFT 入力幅への飽和（12bit ADC + 逆回転で ±2047 をわずかに超えることがある）
+  localparam signed [15:0] SAT_HI = (1 << (FFT_W - 1)) - 1;
+  localparam signed [15:0] SAT_LO = -(1 << (FFT_W - 1));
+  function [15:0] sat;
+    input signed [15:0] v;
+    sat = (v > SAT_HI) ? SAT_HI : (v < SAT_LO) ? SAT_LO : v;
+  endfunction
+  wire [15:0] adc_i_s = sat(adc_i);
+  wire [15:0] adc_q_s = sat(adc_q);
+
   always @(posedge clk) begin
     if (rst || !enable) begin
       pos <= 'd0;
@@ -151,11 +162,12 @@ module isdbt_fe_win #(
       sf_wr <= 'd0;
       st_rd <= 'd0;
     end else begin
-      // sync_mode: 窓の途中で来た（遅れた）開始要求は捨てる
-      if (sync_mode && !st_empty && adc_valid && (in_win != 0) && ($signed(sample_count[31:0] - st_head) > 0)) st_rd <= st_rd + 1'b1;
+      // sync_mode: 既に過ぎた位置の開始要求（捕捉直後や窓の途中に来たもの）は捨てる。
+      // 捨てないと FIFO の先頭で詰まり、以後の窓が一切出ない（実機で発生）
+      if (sync_mode && !st_empty && adc_valid && ($signed(sample_count[31:0] - st_head) > 0)) st_rd <= st_rd + 1'b1;
       if (hdr_pop && !hf_empty) hf_rd <= hf_rd + 1'b1;
       sf_push = 1'b0;
-      sf_din = {1'b0, adc_q, adc_i};
+      sf_din = {1'b0, adc_q_s, adc_i_s};
       if (adc_valid) begin
         pos <= pos + 1'b1;
         if (in_win != 0) begin

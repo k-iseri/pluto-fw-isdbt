@@ -25,9 +25,15 @@ module isdbt_fe_xfft_tb;
   wire [31:0] m_tdata; wire [23:0] m_tuser; wire m_tvalid, m_tlast;
   wire ev_fs, ev_tlu, ev_tlm, ev_halt;
 
+  // 実機と同じく CORDIC 回転器（位相 0）を通す（スケール・遅延・飽和の検証）
+  wire r_valid; wire signed [15:0] r_i, r_q; wire [31:0] r_idx;
+  isdbt_rotate rot (
+    .clk(clk), .mode({3'd0, enable}), .valid_in(adc_valid), .x_in(adc_i), .y_in(adc_q), .phase_in(32'd0), .idx_in(sample_count[31:0]),
+    .valid_out(r_valid), .x_out(r_i), .y_out(r_q), .idx_out(r_idx));
+
   isdbt_fe_win #(.N(N)) win (
     .clk(clk), .rst(rst), .mode({3'd0, enable}), .stride(stride), .offset(offset), .decim(decim),
-    .sample_count(sample_count), .adc_valid(adc_valid), .adc_i(adc_i), .adc_q(adc_q),
+    .sample_count({32'd0, r_idx}), .adc_valid(r_valid), .adc_i(r_i), .adc_q(r_q),
     .start_valid(1'b0), .start_pos(32'd0),
     .cfg_tdata(cfg_tdata), .cfg_tvalid(cfg_tvalid), .cfg_tready(cfg_tready),
     .s_tdata(s_tdata), .s_tvalid(s_tvalid), .s_tlast(s_tlast), .s_tready(s_tready),
