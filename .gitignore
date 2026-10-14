@@ -19,3 +19,6 @@ recovery/
 
 # エディタ
 .vscode/
+
+# 配布物の置き場（GitHub Release にアップロードする）
+dist/
