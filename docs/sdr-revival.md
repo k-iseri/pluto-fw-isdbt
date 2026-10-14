@@ -22,21 +22,30 @@ BootROM → vendor FSBL → vendor u-boot ──(公式 bit を PL へ)──→
 |---|---|---|
 | `overlay/etc/init.d/S22fpga` | PL 再ロード + ドライバ再バインド | MIT（本リポジトリ） |
 | `overlay/lib/firmware/pluto-pl.bin` | ボード固有 PL イメージ。2026-10-14 からは hdl フォーク `projects/pluto_nano` の自前ビルド（`scripts/bit2bin.py` で .bin 化）。それ以前は tezuka nano の bit（GPL-3） | ビルド成果物なのでリポジトリに含めない（.gitignore）。`recovery/pluto-pl-nano-r1.bin` に保管 |
-| `buildroot/board/pluto/post-build.sh` のフック | `PLUTO_EXTRA_OVERLAY` を rootfs に重ねる | `patches/buildroot-post-build-overlay.patch`（buildroot は未フォーク） |
+| `scripts/br-post-build.sh` | `PLUTO_EXTRA_OVERLAY` を rootfs に重ねる（plutosdr-fw フォークの Makefile が `PLUTO_EXTRA_POST_BUILD` で buildroot に渡す） | MIT（本リポジトリ）。buildroot は未フォークのまま無改変 |
 | itb | **必ず Makefile（scripts/pluto.its、config@0〜@10）で生成** | — |
 
 ## ビルド
 
 ```
 cd plutosdr-fw
+R=/path/to/pluto-fw-isdbt
+rm -f build/system_top.xsa build/system_top.bit     # XSA を差し替えるとき
 env -i HOME=$HOME PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-  PLUTO_EXTRA_OVERLAY=/path/to/pluto-fw-isdbt/overlay SKIP_LEGAL=1 \
-  make VIVADO_SETTINGS=/nonexistent build/pluto.frm build/pluto.dfu
+  PLUTO_EXTRA_OVERLAY=$R/overlay PLUTO_EXTRA_POST_BUILD=$R/scripts/br-post-build.sh SKIP_LEGAL=1 \
+  make VIVADO_SETTINGS=/nonexistent XSA_FILE=hdl/projects/pluto_nano/pluto_nano.sdk/system_top.xsa \
+       build/pluto.frm build/pluto.dfu
 ```
+- `XSA_FILE=...`: 自前ビルドの XSA を使う（2026-10-14 の r3b 以降）。itb に自前の bit が入り、ベンダー u-boot が
+  起動時にロードするので **Linux での PL 再ロード（S22fpga）は不要**になった。S22fpga は overlay に
+  `lib/firmware/pluto-pl.bin` があるときだけ動く退路として残してあり、AD9361 が probe 済みなら何もしない
 - `VIVADO_SETTINGS=/nonexistent`: Vivado 導入後は Makefile が xsct（Vitis）を要求する経路に入るため、
-  公式 XSA の bit を使う経路を強制する
+  XSA の bit をそのまま使う経路を強制する（XSA_FILE 未指定なら公式リリースの XSA をダウンロード）
+- `PLUTO_EXTRA_POST_BUILD`: plutosdr-fw フォークの Makefile が buildroot の post-build スクリプトに連結する
+  （buildroot 本体は改変しない。以前の `patches/buildroot-post-build-overlay.patch` は廃止）
 - `SKIP_LEGAL=1`: legal-info（全ソース取得）を省略
 - `env -i`: WSL が継承する Windows PATH（空白入り）を buildroot が拒否するため
+- `buildroot/output/target` は前回の内容が残るので、overlay からファイルを消したときは target 側も消す
 
 ## .bin の作り方（.bit → byte-swapped .bin）
 

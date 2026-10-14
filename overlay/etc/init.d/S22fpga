@@ -13,6 +13,11 @@ MGR=/sys/class/fpga_manager/fpga0
 case "$1" in
 start)
 	[ -f /lib/firmware/$FW ] || exit 0
+	# itb のビットストリームがこの基板用（u-boot がロード済みで AD9361 が probe 済み）なら何もしない
+	if grep -qs "^ad9361-phy$" /sys/bus/iio/devices/iio:device*/name; then
+		echo "S22fpga: AD9361 already probed with the boot-time PL, skipping reload"
+		exit 0
+	fi
 	[ -d $MGR ] || { echo "S22fpga: no fpga_manager"; exit 0; }
 	printf "Loading PL from /lib/firmware/%s: " "$FW"
 	echo $FW > $MGR/firmware
