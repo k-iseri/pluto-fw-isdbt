@@ -10,7 +10,8 @@
 module isdbt_eq_tb;
   parameter N = 8192;
   parameter TOTAL = 5617;
-  parameter GAP = 60000;            // 窓と窓の間のサイクル数（実機は ~61,500）
+  parameter GAP = 2048;             // 窓と窓の間のサイクル数（実機: l_clk = 2×fs で窓間隔 18,432、受信 16,384）
+  parameter BIN_CYCLES = 2;         // 1 ビンあたりのサイクル（実機の FFT はサンプル速度 = 2 サイクルに 1 ビン）
   parameter INT_CFO = 9;
   reg clk = 0; always #8 clk = ~clk;
   reg rst = 1;
@@ -32,7 +33,7 @@ module isdbt_eq_tb;
   integer i;
   // 出力ワードを並べて 3 バイト単位に復元
   reg [7:0] bytes [0:3*TOTAL+3];
-  integer nb = 0, k;
+  integer nb = 0, k, kk;
   always @(posedge clk) begin
     if (o_valid && o_ready) begin
       nwords = nwords + 1;
@@ -40,14 +41,17 @@ module isdbt_eq_tb;
       nb = nb + 4;
       if (o_last) begin
         $fwrite(fout, "S %0d words %0d sp %0d omega %0d cpe %0d\n", nsym, nwords, sp_phase, afc_omega, dut.cpe_phase);
-        for (k = 0; k < TOTAL; k = k + 1) $fwrite(fout, "%02x %02x %02x\n", bytes[3*k], bytes[3*k+1], bytes[3*k+2]);
+        for (k = 0; k < TOTAL; k = k + 1) begin
+          kk = (k - (2808 - INT_CFO) + TOTAL) % TOTAL;     // キャリア k は出力位置 kk（ビン順）
+          $fwrite(fout, "%02x %02x %02x\n", bytes[3*kk], bytes[3*kk+1], bytes[3*kk+2]);
+        end
         nb = 0; nwords = 0; nsym = nsym + 1;
       end
     end
   end
 
   always @(posedge clk) if (dut.state == 4'd5 && nsym < 12)
-    $display("sym %0d: slot %0d acc_re %0d acc_im %0d acc_hh %0d acc_h4 %0d sp %0d", nsym, dut.slot, dut.acc_re, dut.acc_im, dut.acc_hh, dut.acc_h4, dut.sp_phase);
+    $display("sym %0d: slot %0d acc_re %0d acc_im %0d acc_hh %0d acc_h4 %0d sp %0d", nsym, dut.slot_b, dut.bacc_re, dut.bacc_im, dut.bacc_hh, dut.bacc_h4, dut.sp_phase);
 
   reg [3:0] st_d = 0; integer ntrans = 0;
   always @(posedge clk) begin
@@ -57,7 +61,36 @@ module isdbt_eq_tb;
     if (dut.state == 4'd8 && dut.p_v[8] && dut.b2_k == 13'd2000 && nsym < 12) $display("   k~2000: E4 %0d csi_m2 %0d c8 %0d e_clz5 %0d", dut.E4, dut.csi_m2, dut.c8, dut.e_clz5);
   end
 
+  // 自己一致検査: シンボル処理の終わり（FLUSH → IDLE）に、履歴スロット slot_b の H_sp が
+  // sym_mem の SP 値 × 符号 × 3/4 と一致するか（受信中 SP パスの添字・符号の検証）
+  integer sc_m, sc_k, sc_bin, sc_bad, sc_hits, sc_n = 0;
+  reg signed [12:0] sc_yi, sc_yq, sc_ei, sc_eq, sc_hi, sc_hq;
+  reg [25:0] sc_y, sc_h;
+  always @(posedge clk) if (dut.sp3) sc_hits = sc_hits + 1;
+  always @(posedge clk) begin
+    if (dut.state == 4'd10 && st_d != 4'd10) begin
+      sc_bad = 0;
+      for (sc_m = 0; sc_m < 468; sc_m = sc_m + 1) begin
+        sc_k = 3 * dut.sp_b + 12 * sc_m;
+        sc_bin = (dut.base_b + sc_k) & 13'h1FFF;
+        sc_y = sc_bin[12] ? dut.sym_mem1[sc_bin[11:0]] : dut.sym_mem0[sc_bin[11:0]];
+        sc_yi = sc_y[12:0]; sc_yq = sc_y[25:13];
+        sc_ei = dut.pilot_sign_rom[sc_k] ? -((sc_yi * 3) >>> 2) : ((sc_yi * 3) >>> 2);
+        sc_eq = dut.pilot_sign_rom[sc_k] ? -((sc_yq * 3) >>> 2) : ((sc_yq * 3) >>> 2);
+        sc_h = dut.hist_mem[{dut.slot_b, sc_m[8:0]}];
+        sc_hi = sc_h[12:0]; sc_hq = sc_h[25:13];
+        if (sc_hi != sc_ei || sc_hq != sc_eq) begin
+          sc_bad = sc_bad + 1;
+          if (sc_bad <= 3 && sc_n < 6) $display("   sym %0d m %0d k %0d: hist %0d %0d expected %0d %0d", sc_n, sc_m, sc_k, sc_hi, sc_hq, sc_ei, sc_eq);
+        end
+      end
+      if (sc_n < 24) $display("selfcheck sym %0d: slot_b %0d sp_b %0d sp_known %0d bad %0d / 468, sp3 hits so far %0d, cpe %0d omega %0d", sc_n, dut.slot_b, dut.sp_b, dut.sp_known, sc_bad, sc_hits, dut.cpe_phase, dut.afc_omega);
+      sc_n = sc_n + 1;
+    end
+  end
+
   initial begin
+    sc_hits = 0;
     fin = $fopen("eq_in.txt", "r");
     fout = $fopen("eq_out.txt", "w");
     #100 rst = 0;
@@ -70,6 +103,7 @@ module isdbt_eq_tb;
         r = $fscanf(fin, "%h %h\n", a, b);
         @(posedge clk);
         m_tvalid <= 1; m_tdata <= {4'd0, b[11:0], 4'd0, a[11:0]}; m_tuser <= {hx, 16'd0}; m_tlast <= (i == N - 1);
+        if (BIN_CYCLES > 1) begin @(posedge clk); m_tvalid <= 0; m_tlast <= 0; repeat (BIN_CYCLES - 2) @(posedge clk); end
       end
       @(posedge clk); m_tvalid <= 0; m_tlast <= 0;
       repeat (GAP) @(posedge clk);

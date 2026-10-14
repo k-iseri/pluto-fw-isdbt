@@ -9,7 +9,8 @@
 //   w0  0x49534254 ("ISBT")
 //   w1  {fmt[7:0], blk_exp[7:0], flags[7:0], mode[7:0]}   flags: bit0 = FIFO あふれで途中が欠けた
 //       fmt: 0 = ビンは {Q16, I16} 1 ワード、1 = 8bit（12bit を丸めて 8bit、{Q8_1, I8_1, Q8_0, I8_0} = 2 ビン/ワード、N/2 ワード）、
-//            2 = 等化済みキャリア（モード 4: isdbt_eq からのワード列。5617 × {I8, Q8, CSI8} = 16851 B → 4213 ワード）
+//            2 = 等化済みキャリア（モード 4: isdbt_eq からのワード列。5617 × {I8, Q8, CSI8} = 16851 B → 4213 ワード。
+//                順序はビン順 = キャリア 2808 − δ から 5616、続いて 0 から。ホストが δ でキャリア順に戻す）
 //   w2  窓開始サンプルカウンタ下位 32bit
 //   w3  同上位 32bit
 //   w4  窓の連番
@@ -25,7 +26,7 @@
 
 module isdbt_fe_out #(
   parameter N = 8192,
-  parameter FIFO_DEPTH = 16384,        // 2 窓分
+  parameter FIFO_DEPTH = 8192,         // 1 窓分弱（モード 4 は 4221 ワード/窓。等化器の履歴 16 スロットに BRAM を回した）
   parameter EXP_LSB = 16,              // m_tuser の blk_exp の位置（XK_INDEX 13bit → 16bit 境界の次）
   parameter FFT_W = 12                 // FFT のデータ幅。16 未満なら各成分を 16bit に符号拡張して出す
 ) (
