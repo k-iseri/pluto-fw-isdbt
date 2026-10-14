@@ -88,6 +88,22 @@ FFT は DSP に余裕があるので 16bit（Xilinx FFT IP の scaled 固定小�
 ホスト側は `rt/isdbt` の等化後データ（`Xt`、`Wt`）を直接受け取る入口を作ればよく、参照実装（`ref/`）で
 FPGA の固定小数点モデルをビット一致で検証する方針は v1 と同じ。
 
+## 3b. 2b-1 の実装と結果（2026-10-14）
+
+土台として「FFT テストモード」を実装した。モード 1 では窓切り出し（`rtl/isdbt_fe_win.v`、offset + k×stride、
+decim で間引き）→ Xilinx FFT 9.1（8192 点、16bit、BFP、pipelined streaming、natural order）→
+ヘッダ付き出力（`rtl/isdbt_fe_out.v`: MAGIC "ISBT"、blk_exp、64bit サンプルカウンタ、連番、8192 ビン）を
+DMA に流し、モード 0 では従来どおり cpack の raw I/Q（`rtl/isdbt_dma_mux.v`）。制御は
+`rtl/isdbt_regs.v`（0x3000 ブロック v2: CAPS / MODE / WIN_STRIDE / WIN_OFFSET / WIN_DECIM / FE_STATUS / FE_FRAMES）。
+
+| 項目 | 結果 |
+|---|---|
+| 資源（7010） | LUT 11,002（63%）、FF 18,972（54%）、BRAM 44（73%）、DSP 25（31%）。BRAM は FFT の自然順並べ替えと出力 FIFO（2 窓）が大きい |
+| シミュレーション | 振る舞いモデルでフレーミング PASS。実物 FFT IP（`rtl/isdbt_fe_xfft_tb.v`、`scripts/sim_fe_xfft.tcl`）で全窓一致 0.25 LSB rms |
+| 実機（ループバック、isdbt-sdr `tools/fe_fft_test.py`） | raw 経路 258,048 サンプルがビット一致。FFT 出力は numpy FFT と相対 rms −72 dB（BFP 16bit の丸め）、逆 FFT の時間領域最大誤差 0.58 LSB、連番・サンプルカウンタの連続性 OK |
+| 落とし穴 | **xfft（realtime）はフレーム先頭サンプルの直後に 1 サイクル tready を落とす。** 無視して流すと 2 サンプル目が欠け末尾が重複する（xsim で再現 → 窓エンジンに FIFO を入れて tready を守る） |
+| 検証手法 | AD9361 のデジタルループバック（`loopback`=1）で既知の 12bit パターンを TX から巡回送信すると、RX の 12bit 値が TX と完全一致するので FPGA 内の処理をビット精度で検証できる。以降の 2b の段階（同期・等化）も同じ枠組みで、ref/ の合成 ISDB-T 信号を流して照合する |
+
 ## 4. 検証計画
 
 | 段階 | 合格基準 |
