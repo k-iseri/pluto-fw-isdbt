@@ -8,13 +8,14 @@
 // 出力フォーマット（32bit リトルエンディアンのワード列、1 窓 = 8 + N ワード）:
 //   w0  0x49534254 ("ISBT")
 //   w1  {fmt[7:0], blk_exp[7:0], flags[7:0], mode[7:0]}   flags: bit0 = FIFO あふれで途中が欠けた
-//       fmt: 0 = ビンは {Q16, I16} 1 ワード、1 = 8bit（12bit を丸めて 8bit、{Q8_1, I8_1, Q8_0, I8_0} = 2 ビン/ワード、N/2 ワード）
+//       fmt: 0 = ビンは {Q16, I16} 1 ワード、1 = 8bit（12bit を丸めて 8bit、{Q8_1, I8_1, Q8_0, I8_0} = 2 ビン/ワード、N/2 ワード）、
+//            2 = 等化済みキャリア（モード 4: isdbt_eq からのワード列。5617 × {I8, Q8, CSI8} = 16851 B → 4213 ワード）
 //   w2  窓開始サンプルカウンタ下位 32bit
 //   w3  同上位 32bit
 //   w4  窓の連番
-//   w5  N
-//   w6  0
-//   w7  0
+//   w5  Δ_n（窓タイミングの小数部、1/256 サンプル。モード 2/3/4）
+//   w6  info_a（同期モード: cfo_inc）
+//   w7  info_b（同期モード: status_word）
 //   w8.. ビン k=0..N-1 の {Q[31:16], I[15:0]}（自然順）
 //
 // SPDX-License-Identifier: MIT
@@ -41,11 +42,18 @@ module isdbt_fe_out #(
   // ヘッダ FIFO（isdbt_fe_win）
   input       [63:0]      hdr_start,
   input       [31:0]      hdr_seq,
+  input       [31:0]      hdr_delta,
   input                   hdr_valid,
   output reg              hdr_pop,
   // ヘッダ w6 / w7 に入れる付加情報（窓の先頭でラッチ。同期モードでは CFO 増分とロック状態）
   input       [31:0]      info_a,
   input       [31:0]      info_b,
+
+  // 等化器のワード列（モード 4）
+  input                   eq_valid,
+  output                  eq_ready,
+  input       [31:0]      eq_data,
+  input                   eq_last,
 
   // DMA へ
   output reg              dma_wr_en,
@@ -56,6 +64,7 @@ module isdbt_fe_out #(
 
   wire enable = (mode != 4'd0);
   wire pack8 = (mode == 4'd3);        // ビンを 8bit × 2 で出す（モード 3）
+  wire eq_mode = (mode == 4'd4);      // 等化器のワード列を流す（FFT 出力はスキッド FIFO に入れない）
   // 12bit（FFT_W）→ 8bit: 丸めて飽和
   function [7:0] to8;
     input signed [15:0] v;
@@ -87,8 +96,10 @@ module isdbt_fe_out #(
       frame_first <= 1'b1;
       exp_wr <= 'd0;
     end else if (m_tvalid) begin
-      sk_mem[sk_wr[4:0]] <= {m_tlast, m_tdata_sx};
-      sk_wr <= sk_wr + 1'b1;
+      if (!eq_mode) begin
+        sk_mem[sk_wr[4:0]] <= {m_tlast, m_tdata_sx};
+        sk_wr <= sk_wr + 1'b1;
+      end
       if (frame_first) begin
         exp_fifo[exp_wr[1:0]] <= m_tuser[EXP_LSB +: 8];
         exp_wr <= exp_wr + 1'b1;
@@ -113,17 +124,17 @@ module isdbt_fe_out #(
   reg   [63:0]  cur_start = 'd0;
   reg   [31:0]  cur_seq = 'd0;
   reg   [7:0]   cur_exp = 'd0;
-  reg   [31:0]  cur_a = 'd0, cur_b = 'd0;
+  reg   [31:0]  cur_a = 'd0, cur_b = 'd0, cur_delta = 'd0;
   reg   [31:0]  hdr_word;
 
   always @(*) begin
     case (hdr_idx)
       4'd0: hdr_word = 32'h49534254;
-      4'd1: hdr_word = {7'd0, pack8, cur_exp, 7'd0, dropped, 4'd0, mode};
+      4'd1: hdr_word = {6'd0, eq_mode, pack8, cur_exp, 7'd0, dropped, 4'd0, mode};
       4'd2: hdr_word = cur_start[31:0];
       4'd3: hdr_word = cur_start[63:32];
       4'd4: hdr_word = cur_seq;
-      4'd5: hdr_word = N;
+      4'd5: hdr_word = cur_delta;
       4'd6: hdr_word = cur_a;
       4'd7: hdr_word = cur_b;
       default: hdr_word = 32'd0;
@@ -134,6 +145,7 @@ module isdbt_fe_out #(
   reg   [15:0]  pk_lo = 'd0;          // 8bit パッキングの前半ビン
   reg           pk_half = 1'b0;
   wire  [15:0]  pk_cur = {to8(sk_q[31:16]), to8(sk_q[15:0])};
+  assign eq_ready = eq_mode && in_frame && (hdr_idx == 4'd8) && !f_full;
   always @(posedge clk) begin
     hdr_pop <= 1'b0;
     if (rst || !enable) begin
@@ -147,9 +159,10 @@ module isdbt_fe_out #(
       frames_out <= 'd0;
     end else if (!in_frame) begin
       // 窓の先頭データが来ていて、ヘッダ情報と blk_exp が揃っていればヘッダ送出を始める
-      if (!sk_empty && hdr_valid && (exp_wr != exp_rd)) begin
+      if ((eq_mode ? eq_valid : !sk_empty) && hdr_valid && (exp_wr != exp_rd)) begin
         cur_start <= hdr_start;
         cur_seq <= hdr_seq;
+        cur_delta <= hdr_delta;
         cur_a <= info_a;
         cur_b <= info_b;
         cur_exp <= exp_fifo[exp_rd[1:0]];
@@ -167,6 +180,16 @@ module isdbt_fe_out #(
         dropped <= 1'b1;
       end
       hdr_idx <= hdr_idx + 1'b1;
+    end else if (eq_mode) begin
+      if (eq_valid && eq_ready) begin
+        fifo_mem[f_wr[AW-1:0]] <= eq_data;
+        f_wr <= f_wr + 1'b1;
+        if (eq_last) begin
+          in_frame <= 1'b0;
+          frames_out <= frames_out + 1'b1;
+          if (dropped) fifo_overflow_count <= fifo_overflow_count + 1'b1;
+        end
+      end
     end else if (!sk_empty) begin
       if (pack8 && !pk_half && !sk_last) begin
         pk_lo <= pk_cur;                // 前半ビンを保持

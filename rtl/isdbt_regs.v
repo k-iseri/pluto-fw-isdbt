@@ -1,19 +1,20 @@
-// isdbt_regs: pluto-fw-isdbt のレジスタブロック（axi_ad9361 コア内 バイト 0x3000、16 ワード）
+// isdbt_regs: pluto-fw-isdbt のレジスタブロック（axi_ad9361 コア内 バイト 0x3000、32 ワード）
 //
 // v1 の isdbt_sample_counter（0x00〜0x18 は互換）に、前段オフロード（design-v2 2b）の制御を足したもの。
 // すべて libiio の iio_device_reg_read/write(dev, 0x80003000 + off) で触れる（カーネル・dts 変更なし）。
 //
 // オフセット  名前        R/W  内容
 //   0x00    MAGIC        R   0x49534442 ("ISDB")。純正コアは 0xDEADDEAD を返す
-//   0x04    VERSION      R   2
+//   0x04    VERSION      R   3（v2b-3b: 等化器）
 //   0x08    CNT_LO       R   ADC サンプルカウンタ下位（読むと上位を CNT_HI にラッチ）
 //   0x0C    CNT_HI       R   同上位（CNT_LO 読み出し時点）
 //   0x10    OVF_CNT      R   adc_dovf 立ち上がり回数
 //   0x14    DROP_CNT     R   adc_dovf が 1 だったクロック数 = 捨てた DMA ビート数
 //   0x18    FORMAT       R   bit[7:0] = pack8 のシフト量
 //   0x1C    CAPS         R   能力ビット: bit0 8bit I/Q、bit1 サンプルカウンタ、bit2 FFT テスト出力、
-//                            bit3 等化済みキャリア出力（未実装）、bit4 TS 出力（未実装）
-//   0x20    MODE         RW  DMA に流すもの: 0 = raw I/Q（pack8/cpack、既定）、1 = FFT テスト（窓ごとに 8192 ビン）
+//                            bit3 等化済みキャリア出力（モード 4）、bit4 TS 出力（未実装）
+//   0x20    MODE         RW  DMA に流すもの: 0 = raw I/Q（pack8/cpack、既定）、1 = FFT テスト（窓ごとに 8192 ビン）、
+//                            2 = 同期 FFT 16bit、3 = 同期 FFT 8bit、4 = 等化済みキャリア（I/Q/CSI 各 8bit）
 //   0x24    WIN_STRIDE   RW  窓の開始間隔 [サンプル]（既定 9216 = Mode 3 GI 1/8 のシンボル長）
 //   0x28    WIN_OFFSET   RW  最初の窓の開始位置 [サンプル]（MODE を 0→1 にした時点から）
 //   0x2C    WIN_DECIM    RW  窓の間引き（n 窓に 1 つ出力。既定 1）。FFT テスト出力は 1 窓 32,800 B なので
@@ -22,6 +23,12 @@
 //   0x34    FE_FRAMES    R   出力した窓の数
 //   0x38    SYNC_STATUS  R   isdbt_sync の状態（dbg_word）
 //   0x3C    SYNC_PEAK    R   {avg_peak[31:16], peak_mag2[31:16]}
+//   0x40    EQ_CTRL      RW  bit[7:0] 整数 CFO δ（符号付き、ビン）、bit8 AFC 有効、bit9 CPE 有効、
+//                            bit10 SP 位相固定、bit[13:12] 固定する SP 位相（既定 0x300 = AFC+CPE 有効、δ 0）
+//   0x44    EQ_STATUS    R   isdbt_eq の dbg_word {state[3:0], sp_phase[1:0], overrun, 0, cpe[11:0], sym_count[11:0]}
+//   0x48    EQ_OMEGA     R   AFC の ω（turns/シンボル、2^32 = 1 回転）
+//   0x4C    TIM_EST      R   同期の T_est（16.16、シンボル長の推定 [サンプル]）
+//   0x50    TIM_DELTA    R   直近の窓の Δ_n（1/256 サンプル）
 //
 // クロック: カウンタと前段制御は ADC クロック（d_clk = l_clk）、レジスタは AXI クロック。
 // up → d は up_xfer_cntrl、d → up は up_xfer_status（ADI のハンドシェイク CDC）。
@@ -33,9 +40,9 @@
 
 module isdbt_regs #(
   parameter [13:0] BASE_ADDR = 14'h0C00,
-  parameter [31:0] VERSION = 32'd2,
+  parameter [31:0] VERSION = 32'd3,
   parameter [7:0]  PACK_SHIFT = 8'd4,
-  parameter [31:0] CAPS = 32'h00000007
+  parameter [31:0] CAPS = 32'h0000000F
 ) (
   // ADC クロックドメイン
   input                   d_clk,
@@ -47,10 +54,15 @@ module isdbt_regs #(
   output      [15:0]      d_win_stride,
   output      [15:0]      d_win_offset,
   output      [7:0]       d_win_decim,
+  output      [15:0]      d_eq_ctrl,
   input       [31:0]      d_fe_status,
   input       [31:0]      d_fe_frames,
   input       [31:0]      d_sync_status,
   input       [31:0]      d_sync_peak,
+  input       [31:0]      d_eq_status,
+  input       [31:0]      d_eq_omega,
+  input       [31:0]      d_tim_est,
+  input       [31:0]      d_tim_delta,
 
   // プロセッサインターフェース（axi_ad9361 内部バス）
   input                   up_rstn,
@@ -88,8 +100,8 @@ module isdbt_regs #(
   end
   assign d_sample_count = d_cnt;
 
-  // ---- d → up: 192bit ----
-  wire  [255:0] up_status_s;
+  // ---- d → up: 384bit ----
+  wire  [383:0] up_status_s;
   wire  [63:0]  up_cnt_s = up_status_s[63:0];
   wire  [31:0]  up_ovf_cnt_s = up_status_s[95:64];
   wire  [31:0]  up_drop_cnt_s = up_status_s[127:96];
@@ -97,37 +109,42 @@ module isdbt_regs #(
   wire  [31:0]  up_fe_frames_s = up_status_s[191:160];
   wire  [31:0]  up_sync_status_s = up_status_s[223:192];
   wire  [31:0]  up_sync_peak_s = up_status_s[255:224];
+  wire  [31:0]  up_eq_status_s = up_status_s[287:256];
+  wire  [31:0]  up_eq_omega_s = up_status_s[319:288];
+  wire  [31:0]  up_tim_est_s = up_status_s[351:320];
+  wire  [31:0]  up_tim_delta_s = up_status_s[383:352];
 
   up_xfer_status #(
-    .DATA_WIDTH (256)
+    .DATA_WIDTH (384)
   ) i_xfer_status (
     .up_rstn (up_rstn),
     .up_clk (up_clk),
     .up_data_status (up_status_s),
     .d_rst (d_rst),
     .d_clk (d_clk),
-    .d_data_status ({d_sync_peak, d_sync_status, d_fe_frames, d_fe_status, d_drop_cnt, d_ovf_cnt, d_cnt}));
+    .d_data_status ({d_tim_delta, d_tim_est, d_eq_omega, d_eq_status, d_sync_peak, d_sync_status, d_fe_frames, d_fe_status, d_drop_cnt, d_ovf_cnt, d_cnt}));
 
-  // ---- up → d: 制御 44bit ----
+  // ---- up → d: 制御 60bit ----
+  reg   [15:0]  up_eq_ctrl = 16'h0300;
   reg   [3:0]   up_mode = 4'd0;
   reg   [15:0]  up_win_stride = 16'd9216;
   reg   [15:0]  up_win_offset = 16'd0;
   reg   [7:0]   up_win_decim = 8'd1;
 
   up_xfer_cntrl #(
-    .DATA_WIDTH (44)
+    .DATA_WIDTH (60)
   ) i_xfer_cntrl (
     .up_rstn (up_rstn),
     .up_clk (up_clk),
-    .up_data_cntrl ({up_win_decim, up_win_offset, up_win_stride, up_mode}),
+    .up_data_cntrl ({up_eq_ctrl, up_win_decim, up_win_offset, up_win_stride, up_mode}),
     .up_xfer_done (),
     .d_rst (d_rst),
     .d_clk (d_clk),
-    .d_data_cntrl ({d_win_decim, d_win_offset, d_win_stride, d_mode}));
+    .d_data_cntrl ({d_eq_ctrl, d_win_decim, d_win_offset, d_win_stride, d_mode}));
 
   // ---- レジスタ読み書き ----
-  wire          up_wreq_s = (up_waddr[13:4] == BASE_ADDR[13:4]) ? up_wreq : 1'b0;
-  wire          up_rreq_s = (up_raddr[13:4] == BASE_ADDR[13:4]) ? up_rreq : 1'b0;
+  wire          up_wreq_s = (up_waddr[13:5] == BASE_ADDR[13:5]) ? up_wreq : 1'b0;
+  wire          up_rreq_s = (up_raddr[13:5] == BASE_ADDR[13:5]) ? up_rreq : 1'b0;
   reg   [31:0]  up_cnt_hi_latched = 'd0;
 
   always @(negedge up_rstn or posedge up_clk) begin
@@ -140,39 +157,46 @@ module isdbt_regs #(
       up_win_stride <= 16'd9216;
       up_win_offset <= 16'd0;
       up_win_decim <= 8'd1;
+      up_eq_ctrl <= 16'h0300;
     end else begin
       up_wack <= up_wreq_s;
       up_rack <= up_rreq_s;
       if (up_wreq_s == 1'b1) begin
-        case (up_waddr[3:0])
-          4'h8: up_mode <= up_wdata[3:0];
-          4'h9: up_win_stride <= up_wdata[15:0];
-          4'hA: up_win_offset <= up_wdata[15:0];
-          4'hB: up_win_decim <= (up_wdata[7:0] == 8'd0) ? 8'd1 : up_wdata[7:0];
+        case (up_waddr[4:0])
+          5'h08: up_mode <= up_wdata[3:0];
+          5'h09: up_win_stride <= up_wdata[15:0];
+          5'h0A: up_win_offset <= up_wdata[15:0];
+          5'h0B: up_win_decim <= (up_wdata[7:0] == 8'd0) ? 8'd1 : up_wdata[7:0];
+          5'h10: up_eq_ctrl <= up_wdata[15:0];
           default: ;
         endcase
       end
       if (up_rreq_s == 1'b1) begin
-        case (up_raddr[3:0])
-          4'h0: up_rdata <= MAGIC;
-          4'h1: up_rdata <= VERSION;
-          4'h2: begin
+        case (up_raddr[4:0])
+          5'h00: up_rdata <= MAGIC;
+          5'h01: up_rdata <= VERSION;
+          5'h02: begin
             up_rdata <= up_cnt_s[31:0];
             up_cnt_hi_latched <= up_cnt_s[63:32];
           end
-          4'h3: up_rdata <= up_cnt_hi_latched;
-          4'h4: up_rdata <= up_ovf_cnt_s;
-          4'h5: up_rdata <= up_drop_cnt_s;
-          4'h6: up_rdata <= {24'd0, PACK_SHIFT};
-          4'h7: up_rdata <= CAPS;
-          4'h8: up_rdata <= {28'd0, up_mode};
-          4'h9: up_rdata <= {16'd0, up_win_stride};
-          4'hA: up_rdata <= {16'd0, up_win_offset};
-          4'hB: up_rdata <= {24'd0, up_win_decim};
-          4'hC: up_rdata <= up_fe_status_s;
-          4'hD: up_rdata <= up_fe_frames_s;
-          4'hE: up_rdata <= up_sync_status_s;
-          4'hF: up_rdata <= up_sync_peak_s;
+          5'h03: up_rdata <= up_cnt_hi_latched;
+          5'h04: up_rdata <= up_ovf_cnt_s;
+          5'h05: up_rdata <= up_drop_cnt_s;
+          5'h06: up_rdata <= {24'd0, PACK_SHIFT};
+          5'h07: up_rdata <= CAPS;
+          5'h08: up_rdata <= {28'd0, up_mode};
+          5'h09: up_rdata <= {16'd0, up_win_stride};
+          5'h0A: up_rdata <= {16'd0, up_win_offset};
+          5'h0B: up_rdata <= {24'd0, up_win_decim};
+          5'h0C: up_rdata <= up_fe_status_s;
+          5'h0D: up_rdata <= up_fe_frames_s;
+          5'h0E: up_rdata <= up_sync_status_s;
+          5'h0F: up_rdata <= up_sync_peak_s;
+          5'h10: up_rdata <= {16'd0, up_eq_ctrl};
+          5'h11: up_rdata <= up_eq_status_s;
+          5'h12: up_rdata <= up_eq_omega_s;
+          5'h13: up_rdata <= up_tim_est_s;
+          5'h14: up_rdata <= up_tim_delta_s;
           default: up_rdata <= 32'd0;
         endcase
       end else begin

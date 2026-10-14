@@ -40,6 +40,7 @@ module isdbt_fe_win #(
   // isdbt_sync からの窓開始要求（sync_mode）。FIFO 4 段
   input                   start_valid,
   input       [31:0]      start_pos,
+  input       [31:0]      start_delta,
 
   // FFT 設定（forward のみ）
   output reg  [7:0]       cfg_tdata,
@@ -56,13 +57,14 @@ module isdbt_fe_win #(
   input                   hdr_pop,
   output      [63:0]      hdr_start,
   output      [31:0]      hdr_seq,
+  output      [31:0]      hdr_delta,       // 窓の Δ_n（isdbt_sync の tim_delta を開始要求と一緒に運ぶ）
   output                  hdr_valid,
 
   output reg  [15:0]      overrun_count
 );
 
   wire enable = (mode != 4'd0);
-  wire sync_mode = (mode == 4'd2) || (mode == 4'd3);   // 2 = 同期 FFT 16bit、3 = 同期 FFT 8bit
+  wire sync_mode = (mode == 4'd2) || (mode == 4'd3) || (mode == 4'd4);   // 2 = 同期 FFT 16bit、3 = 同期 FFT 8bit、4 = 等化
 
   // ---- FFT 設定 ----
   reg cfg_done = 1'b0;
@@ -92,6 +94,7 @@ module isdbt_fe_win #(
   // ヘッダ FIFO（小さいのでレジスタ）
   reg   [63:0]  hf_start [0:HDR_DEPTH-1];
   reg   [31:0]  hf_seq [0:HDR_DEPTH-1];
+  reg   [31:0]  hf_delta [0:HDR_DEPTH-1];
   reg   [$clog2(HDR_DEPTH):0] hf_wr = 'd0, hf_rd = 'd0;
   wire  hf_empty = (hf_wr == hf_rd);
   wire  [$clog2(HDR_DEPTH)-1:0] hf_wr_i = hf_wr[$clog2(HDR_DEPTH)-1:0];
@@ -99,19 +102,21 @@ module isdbt_fe_win #(
   assign hdr_valid = !hf_empty;
   assign hdr_start = hf_start[hf_rd_i];
   assign hdr_seq = hf_seq[hf_rd_i];
+  assign hdr_delta = hf_delta[hf_rd_i];
 
   wire emit_this = (decim_cnt == 8'd0);
 
   // ---- 窓開始要求 FIFO（sync_mode）----
-  reg   [31:0]  st_mem [0:3];
+  reg   [63:0]  st_mem [0:3];              // {delta, start_pos}
   reg   [2:0]   st_wr = 'd0, st_rd = 'd0;
   wire          st_empty = (st_wr == st_rd);
-  wire  [31:0]  st_head = st_mem[st_rd[1:0]];
+  wire  [31:0]  st_head = st_mem[st_rd[1:0]][31:0];
+  wire  [31:0]  st_head_delta = st_mem[st_rd[1:0]][63:32];
   always @(posedge clk) begin
     if (rst || !enable) begin
       st_wr <= 'd0;
     end else if (start_valid && ((st_wr - st_rd) != 3'd4)) begin
-      st_mem[st_wr[1:0]] <= start_pos;
+      st_mem[st_wr[1:0]] <= {start_delta, start_pos};
       st_wr <= st_wr + 1'b1;
     end
   end
@@ -188,6 +193,7 @@ module isdbt_fe_win #(
             win_bad <= 1'b0;
             hf_start[hf_wr_i] <= sample_count;
             hf_seq[hf_wr_i] <= seq;
+            hf_delta[hf_wr_i] <= sync_mode ? st_head_delta : 32'd0;
             hf_wr <= hf_wr + 1'b1;
             seq <= seq + 1'b1;
           end

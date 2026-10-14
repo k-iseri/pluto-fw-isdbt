@@ -10,6 +10,10 @@
 //   ロック: 追従窓内の最大 |c|² が移動平均の 1/4 未満の回が MISS_MAX 連続したら捕捉へ戻る
 //   無音・雑音対策: 捕捉・追従とも「ピーク > シンボル内平均 × 9」（和 >> 10、T/1024 = 9）を要求する。
 //         入力が無音のときに追従へ入って avg_peak = 0 で固まる（信号が来ても復帰しない）のを防ぐ
+//   滑らかな時間軸（等化器の窓揺れ補償用、tim_delta）: 追従の窓開始 s_n は雑音で ±2 サンプル揺れる上、数百シンボル
+//         周期で ±1 さまよう。T_est = (pred_n − pred_{n−2^L}) / 2^L（L = 8 → 10 → 12 → 13、以後は IIR 1/2）で
+//         シンボル長を精密に推定し、τ += T_est（帰還なし）で直線の時間軸を作る。Δ_n = s_n − τ_n（1/256 サンプル、
+//         mod N·256）を窓ごとに出す。等化器はビン b を e^{−j2π b Δ_n/N} で回して窓のずれを消す
 //   追従の探索開始は pred − W ちょうどではなく [pred − W, pred + W) に入っていれば開始し、
 //         pred + W を過ぎていれば（捕捉のピークが窓の先頭 W 以内だった等）pred を 1 シンボル進める。
 //         == −W 一致だけだと通り過ぎたときに永久に探索が始まらない
@@ -54,9 +58,11 @@ module isdbt_sync #(
   output reg  [15:0]      lock_losses,
   output      [31:0]      status_word,     // ヘッダ w7 用: {lock_losses[14:0], locked, peak_mag2[31:16]}
   output      [31:0]      dbg_word,        // レジスタ SYNC_STATUS: {state[1:0], in_search, locked, miss[3:0], acq_fail[7:0], lock_losses[15:0]}
-  output      [31:0]      dbg_peak         // レジスタ SYNC_PEAK: {avg_peak[31:16], peak_mag2[31:16]}
+  output      [31:0]      dbg_peak,        // レジスタ SYNC_PEAK: {avg_peak[31:16], peak_mag2[31:16]}
+  output reg  [31:0]      tim_delta,       // 直近の窓の Δ_n（1/256 サンプル、mod N·256。start_valid と同時に更新）
+  output      [31:0]      tim_est          // T_est（16.16 固定小数点）
 );
-  wire enable = (mode == 4'd2) || (mode == 4'd3);
+  wire enable = (mode == 4'd2) || (mode == 4'd3) || (mode == 4'd4);
   assign status_word = {lock_losses[14:0], locked, peak_mag2[31:16]};
 
   localparam S_ACQ = 2'd0, S_TRACK = 2'd1;
@@ -97,6 +103,21 @@ module isdbt_sync #(
   reg   signed [31:0] cfo_acc = 'd0;
   reg               cfo_init = 1'b0;
 
+  // ---- 滑らかな時間軸 ----
+  reg   [47:0]  tau = 'd0;              // 32.16 固定小数点（整数部は mod 2^32 でよい）
+  reg   [31:0]  t_est = {16'd9216, 16'd0};
+  reg   [31:0]  pred_mark = 'd0;        // ブロック先頭の pred
+  reg   [13:0]  blk_cnt = 'd0;
+  reg   [1:0]   blk_stage = 'd0;        // 0: L=8, 1: L=10, 2: L=12, 3: L=13（IIR）
+  reg           tim_init = 1'b0;
+  wire  [13:0]  blk_len = (blk_stage == 2'd0) ? 14'd256 : (blk_stage == 2'd1) ? 14'd1024 : (blk_stage == 2'd2) ? 14'd4096 : 14'd8192;
+  wire  [31:0]  pred_diff = pred - pred_mark;
+  wire  [47:0]  blk_est48 = {pred_diff, 16'd0} >> ((blk_stage == 2'd0) ? 8 : (blk_stage == 2'd1) ? 10 : (blk_stage == 2'd2) ? 12 : 13);
+  wire  [31:0]  blk_est = blk_est48[31:0];
+  wire signed [32:0] est_diff = $signed({1'b0, blk_est}) - $signed({1'b0, t_est});
+  wire  [47:0]  tau_next = tau + {16'd0, t_est};   // この計測で進めた後の τ（= 今出す窓に対応）
+  assign tim_est = t_est;
+
   always @(posedge clk) begin
     start_valid <= 1'b0;
     at_valid <= 1'b0;
@@ -118,6 +139,11 @@ module isdbt_sync #(
       cfo_inc <= 'd0;
       nco_phase <= 'd0;
       peak_mag2 <= 'd0;
+      tim_init <= 1'b0;
+      t_est <= {16'd9216, 16'd0};
+      blk_stage <= 'd0;
+      blk_cnt <= 'd0;
+      tim_delta <= 'd0;
     end else begin
       if (raw_valid) nco_phase <= nco_phase + cfo_inc;
       if (c_valid) begin
@@ -143,6 +169,14 @@ module isdbt_sync #(
                 at_valid <= 1'b1;
                 at_x <= max_re >>> 12;
                 at_y <= max_im >>> 12;
+                // 時間軸の初期化: τ = 最初の窓開始（この時点の start_pos）、ブロック計数開始
+                tau <= {max_idx + 1 + NG - margin, 16'd0};
+                tim_delta <= 'd0;
+                pred_mark <= max_idx + T;
+                blk_cnt <= 'd0;
+                blk_stage <= 'd0;
+                t_est <= {16'd9216, 16'd0};
+                tim_init <= 1'b1;
               end else begin
                 acq_fail <= acq_fail + 1'b1;      // 無音・雑音: 捕捉をやり直す
               end
@@ -174,6 +208,18 @@ module isdbt_sync #(
       // 計測確定（探索窓の末尾の次のクロック: max_* が最終値）
       if (meas_fire) begin
         peak_mag2 <= max_mag;
+        // 時間軸: 毎シンボル τ += T_est。ブロック末で T_est を更新（pred は ok/miss とも毎シンボル進む）
+        if (tim_init) begin
+          tau <= tau_next;
+          if (blk_cnt == blk_len - 1) begin
+            t_est <= (blk_stage == 2'd3) ? (t_est + (est_diff[32:1])) : blk_est;   // 最終段は IIR 1/2
+            pred_mark <= pred + T + (( max_mag >= (avg_peak >> 2) && trk_par_ok) ? pred_corr : 32'sd0);
+            blk_cnt <= 'd0;
+            if (blk_stage != 2'd3) blk_stage <= blk_stage + 1'b1;
+          end else begin
+            blk_cnt <= blk_cnt + 1'b1;
+          end
+        end
         if (max_mag >= (avg_peak >> 2) && trk_par_ok) begin
           miss <= 'd0;
           locked <= 1'b1;
@@ -182,6 +228,8 @@ module isdbt_sync #(
           start_valid <= 1'b1;
           // 窓開始は生のピーク位置ではなく平均化した推定（pred + 誤差の 2^-ALPHA）から出す
           start_pos <= pred + pred_corr + 1 + NG - margin;
+          // Δ_n = s_n − τ_n（τ はこの計測で進めた後の値。進める前を使うと 1 シンボル分 = 9216 ずれる）
+          tim_delta <= ({pred + pred_corr + 1 + NG - margin, 8'd0} - tau_next[47:8]);
           at_valid <= 1'b1;
           at_x <= max_re >>> 12;
           at_y <= max_im >>> 12;

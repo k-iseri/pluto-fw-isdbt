@@ -8,6 +8,7 @@
 `timescale 1ns/100ps
 
 module isdbt_sync_tb;
+  wire [31:0] tim_delta, tim_est, hdr_delta;
   localparam N = 8192, NG = 1024, T = 9216;
   parameter MODE = 2;              // 2 = 16bit ビン、3 = 8bit ビン
   parameter ZERO_PREFIX = 0;       // 刺激の前に流す無音サンプル数（無音で固まらないことの確認）
@@ -34,7 +35,7 @@ module isdbt_sync_tb;
     .clk(clk), .rst(rst), .mode((enable ? MODE[3:0] : 4'd0)), .margin(16'd128),
     .c_valid(c_valid), .c_re(c_re), .c_im(c_im), .c_mag2(c_mag2), .c_idx(c_idx),
     .raw_valid(adc_valid), .nco_phase(nco_phase),
-    .start_valid(start_valid), .start_pos(start_pos),
+    .start_valid(start_valid), .start_pos(start_pos), .tim_delta(tim_delta), .tim_est(tim_est),
     .locked(locked), .cfo_inc(cfo_inc), .peak_mag2(peak_mag2), .lock_losses(lock_losses), .status_word(status_word));
 
   wire r_valid; wire signed [15:0] r_i, r_q; wire [31:0] r_idx;
@@ -48,10 +49,10 @@ module isdbt_sync_tb;
   isdbt_fe_win #(.N(N)) win (
     .clk(clk), .rst(rst), .mode((enable ? MODE[3:0] : 4'd0)), .stride(16'd0), .offset(16'd0), .decim(8'd1),
     .sample_count({32'd0, r_idx}), .adc_valid(r_valid), .adc_i(r_i), .adc_q(r_q),
-    .start_valid(start_valid), .start_pos(start_pos),
+    .start_valid(start_valid), .start_pos(start_pos), .start_delta(tim_delta),
     .cfg_tdata(cfg_tdata), .cfg_tvalid(cfg_tvalid), .cfg_tready(cfg_tready),
     .s_tdata(s_tdata), .s_tvalid(s_tvalid), .s_tlast(s_tlast), .s_tready(s_tready),
-    .hdr_pop(hdr_pop), .hdr_start(hdr_start), .hdr_seq(hdr_seq), .hdr_valid(hdr_valid),
+    .hdr_pop(hdr_pop), .hdr_start(hdr_start), .hdr_seq(hdr_seq), .hdr_delta(hdr_delta), .hdr_valid(hdr_valid),
     .overrun_count(overrun));
 
   // FFT 振る舞いモデル（恒等、遅延 100）
@@ -65,14 +66,14 @@ module isdbt_sync_tb;
   isdbt_fe_out #(.N(N), .FIFO_DEPTH(16384)) outp (
     .clk(clk), .rst(rst), .mode((enable ? MODE[3:0] : 4'd0)),
     .m_tdata(m_tdata), .m_tuser(24'd0), .m_tvalid(m_tvalid), .m_tlast(m_tlast),
-    .hdr_start(hdr_start), .hdr_seq(hdr_seq), .hdr_valid(hdr_valid), .hdr_pop(hdr_pop),
-    .info_a(cfo_inc), .info_b(status_word),
+    .hdr_start(hdr_start), .hdr_seq(hdr_seq), .hdr_delta(hdr_delta), .hdr_valid(hdr_valid), .hdr_pop(hdr_pop),
+    .info_a(cfo_inc), .info_b(status_word), .eq_valid(1'b0), .eq_ready(), .eq_data(32'd0), .eq_last(1'b0),
     .dma_wr_en(dma_en), .dma_wr_data(dma_data), .fifo_overflow_count(fovf), .frames_out(frames));
 
   integer fin, fev, fout, fcorr, r, ns = 0;
   reg [15:0] a, b;        // 16 進（16bit 2 の補数）で読む。xsim の "%d %d" は両方負の行で失敗する
   always @(posedge clk) begin
-    if (start_valid) $fwrite(fev, "start %0d locked %0d cfo_inc %0d peak %0d at %0d\n", start_pos, locked, cfo_inc, peak_mag2, sample_count);
+    if (start_valid) $fwrite(fev, "start %0d locked %0d cfo_inc %0d peak %0d at %0d delta %0d test %0d\n", start_pos, locked, cfo_inc, peak_mag2, sample_count, $signed(tim_delta), tim_est);
     if (dma_en) $fwrite(fout, "%08x\n", dma_data);
     if (c_valid) $fwrite(fcorr, "%0d %0d %0d %0d\n", c_idx, c_re, c_im, c_mag2);
     if (sync.meas_fire) $display("meas at c_idx=%0d: pred=%0d max_idx=%0d max_mag=%0d avg_peak=%0d miss=%0d", c_idx, sync.pred, sync.max_idx, sync.max_mag, sync.avg_peak, sync.miss);
