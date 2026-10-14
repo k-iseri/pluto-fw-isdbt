@@ -8,7 +8,9 @@
 //   CFO : ピークでの c の位相 φ（turns、2^32 = 1 回転）= ε（ビン間隔単位の小数 CFO）。IIR で平均し、
 //         逆回転の 1 サンプルあたり位相増分 inc = −ε / N = −(φ >>> 13)（N = 8192）。NCO は生サンプルごとに加算
 //   ロック: 追従窓内の最大 |c|² が移動平均の 1/4 未満の回が MISS_MAX 連続したら捕捉へ戻る
-//   無音・雑音対策: 捕捉・追従とも「ピーク > シンボル内平均 × 9」（和 >> 10、T/1024 = 9）を要求する。
+//   無音・雑音対策: 捕捉は 2T 見て「最大ピークが T 後（±W）にも繰り返す（≥ 1/4）」ことを要求する（周期性。雑音では
+//         繰り返さない）。平均比の検査は無音除けとして緩く（> 2.25 × 平均）。弱い信号では |c|² の平均が雑音で上がり
+//         「> 9 × 平均」は通らなくなる（実波で捕捉できなかった、2026-10-15）
 //         入力が無音のときに追従へ入って avg_peak = 0 で固まる（信号が来ても復帰しない）のを防ぐ
 //   滑らかな時間軸（等化器の窓揺れ補償用、tim_delta）: 追従の窓開始 s_n は雑音で ±2 サンプル揺れる上、数百シンボル
 //         周期で ±1 さまよう。T_est = (pred_n − pred_{n−2^L}) / 2^L（L = 8 → 10 → 12 → 13、以後は IIR 1/2）で
@@ -79,8 +81,14 @@ module isdbt_sync #(
   reg   [45:0]  sum_mag = 'd0;          // 計測区間（≈ T サンプル）の mag2 の和（ピーク/平均比の判定用）
   reg   [45:0]  meas_sum = 'd0;         // 計測確定時に使う和
   reg   [7:0]   acq_fail = 'd0;         // 捕捉でピーク/平均比が足りず捕捉をやり直した回数
-  wire          acq_par_ok = (max_mag > sum_mag[45:10]);   // ピーク > 平均 × 9
-  wire          trk_par_ok = (max_mag > meas_sum[45:10]);
+  wire          acq_par_ok = (max_mag > sum_mag[45:12]);   // ピーク > 平均 × 2.25（無音除け）
+  wire          trk_par_ok = (max_mag > meas_sum[45:12]);
+  // 捕捉の 2 周期目: 最大ピークの T 後 ±W での最大
+  reg   [31:0]  max2_mag = 'd0;
+  reg   [31:0]  max2_idx = 'd0;
+  reg   signed [27:0] max2_re = 'd0, max2_im = 'd0;
+  wire signed [31:0] d_rep = c_idx - (max_idx + T);
+  wire          acq_rep_ok = (max2_mag >= (max_mag >> 2)) && (max_mag != 32'd0);
   assign dbg_word = {state, in_search, locked, miss, acq_fail, lock_losses};
   assign dbg_peak = {avg_peak[31:16], peak_mag2[31:16]};
 
@@ -151,30 +159,38 @@ module isdbt_sync #(
       if (c_valid) begin
         case (state)
           S_ACQ: begin
-            if (c_mag2 > max_mag || cnt == 0) begin
-              max_mag <= c_mag2; max_idx <= c_idx; max_re <= c_re; max_im <= c_im;
+            // 1 周期目（cnt < T）: 最大ピークを探す。2 周期目（T ≤ cnt < 2T）: その T 後 ±W の最大を見る
+            if (cnt < T) begin
+              if (c_mag2 > max_mag || cnt == 0) begin
+                max_mag <= c_mag2; max_idx <= c_idx; max_re <= c_re; max_im <= c_im;
+              end
+              sum_mag <= (cnt == 0) ? {14'd0, c_mag2} : sum_mag + c_mag2;
+            end else begin
+              if (cnt == T) max2_mag <= 'd0;
+              if (d_rep >= -W && d_rep <= W && (c_mag2 > max2_mag || cnt == T)) begin
+                max2_mag <= c_mag2; max2_idx <= c_idx; max2_re <= c_re; max2_im <= c_im;
+              end
             end
-            sum_mag <= (cnt == 0) ? {14'd0, c_mag2} : sum_mag + c_mag2;
             cnt <= cnt + 1'b1;
-            if (cnt == T - 1) begin
+            if (cnt == 2 * T - 1) begin
               cnt <= 'd0;
-              if (acq_par_ok) begin
-                pred <= max_idx + T;
-                avg_peak <= max_mag;
+              if (acq_par_ok && acq_rep_ok) begin
+                pred <= max2_idx + T;
+                avg_peak <= max2_mag;
                 state <= S_TRACK;
                 in_search <= 1'b0;
                 miss <= 'd0;
                 sum_mag <= 'd0;
                 // 最初のシンボル: このピークから次の窓を出しておく（追従が始まる前に 1 窓分）
                 start_valid <= 1'b1;
-                start_pos <= max_idx + 1 + NG - margin;
+                start_pos <= max2_idx + 1 + NG - margin;
                 at_valid <= 1'b1;
-                at_x <= max_re >>> 12;
-                at_y <= max_im >>> 12;
+                at_x <= max2_re >>> 12;
+                at_y <= max2_im >>> 12;
                 // 時間軸の初期化: τ = 最初の窓開始（この時点の start_pos）、ブロック計数開始
-                tau <= {max_idx + 1 + NG - margin, 16'd0};
+                tau <= {max2_idx + 1 + NG - margin, 16'd0};
                 tim_delta <= 'd0;
-                pred_mark <= max_idx + T;
+                pred_mark <= max2_idx + T;
                 blk_cnt <= 'd0;
                 blk_stage <= 'd0;
                 t_est <= {16'd9216, 16'd0};
