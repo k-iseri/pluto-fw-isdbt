@@ -8,6 +8,11 @@
 //   CFO : ピークでの c の位相 φ（turns、2^32 = 1 回転）= ε（ビン間隔単位の小数 CFO）。IIR で平均し、
 //         逆回転の 1 サンプルあたり位相増分 inc = −ε / N = −(φ >>> 13)（N = 8192）。NCO は生サンプルごとに加算
 //   ロック: 追従窓内の最大 |c|² が移動平均の 1/4 未満の回が MISS_MAX 連続したら捕捉へ戻る
+//   無音・雑音対策: 捕捉・追従とも「ピーク > シンボル内平均 × 9」（和 >> 10、T/1024 = 9）を要求する。
+//         入力が無音のときに追従へ入って avg_peak = 0 で固まる（信号が来ても復帰しない）のを防ぐ
+//   追従の探索開始は pred − W ちょうどではなく [pred − W, pred + W) に入っていれば開始し、
+//         pred + W を過ぎていれば（捕捉のピークが窓の先頭 W 以内だった等）pred を 1 シンボル進める。
+//         == −W 一致だけだと通り過ぎたときに永久に探索が始まらない
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 k-iseri
@@ -47,7 +52,9 @@ module isdbt_sync #(
   output reg  signed [31:0] cfo_inc,       // 1 サンプルあたりの位相増分（turns）
   output reg  [31:0]      peak_mag2,
   output reg  [15:0]      lock_losses,
-  output      [31:0]      status_word      // ヘッダ w7 用: {lock_losses[14:0], locked, peak_mag2[31:16]}
+  output      [31:0]      status_word,     // ヘッダ w7 用: {lock_losses[14:0], locked, peak_mag2[31:16]}
+  output      [31:0]      dbg_word,        // レジスタ SYNC_STATUS: {state[1:0], in_search, locked, miss[3:0], acq_fail[7:0], lock_losses[15:0]}
+  output      [31:0]      dbg_peak         // レジスタ SYNC_PEAK: {avg_peak[31:16], peak_mag2[31:16]}
 );
   wire enable = (mode == 4'd2) || (mode == 4'd3);
   assign status_word = {lock_losses[14:0], locked, peak_mag2[31:16]};
@@ -63,6 +70,13 @@ module isdbt_sync #(
   reg   [31:0]  avg_peak = 'd0;
   reg   [3:0]   miss = 'd0;
   reg           meas_fire = 1'b0;       // この周期の計測確定
+  reg   [45:0]  sum_mag = 'd0;          // 計測区間（≈ T サンプル）の mag2 の和（ピーク/平均比の判定用）
+  reg   [45:0]  meas_sum = 'd0;         // 計測確定時に使う和
+  reg   [7:0]   acq_fail = 'd0;         // 捕捉でピーク/平均比が足りず捕捉をやり直した回数
+  wire          acq_par_ok = (max_mag > sum_mag[45:10]);   // ピーク > 平均 × 9
+  wire          trk_par_ok = (max_mag > meas_sum[45:10]);
+  assign dbg_word = {state, in_search, locked, miss, acq_fail, lock_losses};
+  assign dbg_peak = {avg_peak[31:16], peak_mag2[31:16]};
 
   wire signed [31:0] d_pred = c_idx - pred;   // 予測ピークからの相対位置
   // 注意: Verilog では符号なしが混ざった式は全体が符号なしになり >>> も論理シフトになる。
@@ -96,6 +110,9 @@ module isdbt_sync #(
       miss <= 'd0;
       avg_peak <= 'd0;
       lock_losses <= 'd0;
+      sum_mag <= 'd0;
+      meas_sum <= 'd0;
+      acq_fail <= 'd0;
       cfo_acc <= 'd0;
       cfo_init <= 1'b0;
       cfo_inc <= 'd0;
@@ -109,27 +126,36 @@ module isdbt_sync #(
             if (c_mag2 > max_mag || cnt == 0) begin
               max_mag <= c_mag2; max_idx <= c_idx; max_re <= c_re; max_im <= c_im;
             end
+            sum_mag <= (cnt == 0) ? {14'd0, c_mag2} : sum_mag + c_mag2;
             cnt <= cnt + 1'b1;
             if (cnt == T - 1) begin
-              pred <= max_idx + T;
-              avg_peak <= max_mag;
-              state <= S_TRACK;
               cnt <= 'd0;
-              in_search <= 1'b0;
-              miss <= 'd0;
-              // 最初のシンボル: このピークから次の窓を出しておく（追従が始まる前に 1 窓分）
-              start_valid <= 1'b1;
-              start_pos <= max_idx + 1 + NG - margin;
-              at_valid <= 1'b1;
-              at_x <= max_re >>> 12;
-              at_y <= max_im >>> 12;
+              if (acq_par_ok) begin
+                pred <= max_idx + T;
+                avg_peak <= max_mag;
+                state <= S_TRACK;
+                in_search <= 1'b0;
+                miss <= 'd0;
+                sum_mag <= 'd0;
+                // 最初のシンボル: このピークから次の窓を出しておく（追従が始まる前に 1 窓分）
+                start_valid <= 1'b1;
+                start_pos <= max_idx + 1 + NG - margin;
+                at_valid <= 1'b1;
+                at_x <= max_re >>> 12;
+                at_y <= max_im >>> 12;
+              end else begin
+                acq_fail <= acq_fail + 1'b1;      // 無音・雑音: 捕捉をやり直す
+              end
             end
           end
           S_TRACK: begin
+            sum_mag <= sum_mag + c_mag2;
             if (!in_search) begin
-              if (d_pred == -W) begin
+              if (d_pred >= -W && d_pred < W) begin
                 in_search <= 1'b1;
                 max_mag <= c_mag2; max_idx <= c_idx; max_re <= c_re; max_im <= c_im;
+              end else if (d_pred >= W) begin
+                pred <= pred + T;                 // 探索窓を丸ごと逃した: 次のシンボルへ
               end
             end else begin
               if (c_mag2 > max_mag) begin
@@ -138,6 +164,8 @@ module isdbt_sync #(
               if (d_pred == W) begin
                 in_search <= 1'b0;
                 meas_fire <= 1'b1;
+                meas_sum <= sum_mag;
+                sum_mag <= {14'd0, c_mag2};
               end
             end
           end
@@ -146,7 +174,7 @@ module isdbt_sync #(
       // 計測確定（探索窓の末尾の次のクロック: max_* が最終値）
       if (meas_fire) begin
         peak_mag2 <= max_mag;
-        if (max_mag >= (avg_peak >> 2)) begin
+        if (max_mag >= (avg_peak >> 2) && trk_par_ok) begin
           miss <= 'd0;
           locked <= 1'b1;
           avg_peak <= avg_peak + avg_corr[31:0];

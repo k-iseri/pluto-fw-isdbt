@@ -20,6 +20,8 @@
 //                            公称レートでは 4 以上にしないと USB 2.0 を超える
 //   0x30    FE_STATUS    R   bit[15:0] 窓取りこぼし回数（FFT が受け付けなかった）、bit[31:16] 出力 FIFO あふれ回数
 //   0x34    FE_FRAMES    R   出力した窓の数
+//   0x38    SYNC_STATUS  R   isdbt_sync の状態（dbg_word）
+//   0x3C    SYNC_PEAK    R   {avg_peak[31:16], peak_mag2[31:16]}
 //
 // クロック: カウンタと前段制御は ADC クロック（d_clk = l_clk）、レジスタは AXI クロック。
 // up → d は up_xfer_cntrl、d → up は up_xfer_status（ADI のハンドシェイク CDC）。
@@ -47,6 +49,8 @@ module isdbt_regs #(
   output      [7:0]       d_win_decim,
   input       [31:0]      d_fe_status,
   input       [31:0]      d_fe_frames,
+  input       [31:0]      d_sync_status,
+  input       [31:0]      d_sync_peak,
 
   // プロセッサインターフェース（axi_ad9361 内部バス）
   input                   up_rstn,
@@ -85,22 +89,24 @@ module isdbt_regs #(
   assign d_sample_count = d_cnt;
 
   // ---- d → up: 192bit ----
-  wire  [191:0] up_status_s;
+  wire  [255:0] up_status_s;
   wire  [63:0]  up_cnt_s = up_status_s[63:0];
   wire  [31:0]  up_ovf_cnt_s = up_status_s[95:64];
   wire  [31:0]  up_drop_cnt_s = up_status_s[127:96];
   wire  [31:0]  up_fe_status_s = up_status_s[159:128];
   wire  [31:0]  up_fe_frames_s = up_status_s[191:160];
+  wire  [31:0]  up_sync_status_s = up_status_s[223:192];
+  wire  [31:0]  up_sync_peak_s = up_status_s[255:224];
 
   up_xfer_status #(
-    .DATA_WIDTH (192)
+    .DATA_WIDTH (256)
   ) i_xfer_status (
     .up_rstn (up_rstn),
     .up_clk (up_clk),
     .up_data_status (up_status_s),
     .d_rst (d_rst),
     .d_clk (d_clk),
-    .d_data_status ({d_fe_frames, d_fe_status, d_drop_cnt, d_ovf_cnt, d_cnt}));
+    .d_data_status ({d_sync_peak, d_sync_status, d_fe_frames, d_fe_status, d_drop_cnt, d_ovf_cnt, d_cnt}));
 
   // ---- up → d: 制御 44bit ----
   reg   [3:0]   up_mode = 4'd0;
@@ -165,6 +171,8 @@ module isdbt_regs #(
           4'hB: up_rdata <= {24'd0, up_win_decim};
           4'hC: up_rdata <= up_fe_status_s;
           4'hD: up_rdata <= up_fe_frames_s;
+          4'hE: up_rdata <= up_sync_status_s;
+          4'hF: up_rdata <= up_sync_peak_s;
           default: up_rdata <= 32'd0;
         endcase
       end else begin

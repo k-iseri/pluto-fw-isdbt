@@ -13,7 +13,7 @@ import numpy as np
 N, NG, MARGIN = 8192, 1024, 128
 d = Path(sys.argv[1])
 meta = json.loads((d / "sync_stim.json").read_text())
-truth = np.array(meta["useful_starts"]) - MARGIN          # FPGA が開くべき窓の開始（小数）
+truth = np.array(meta["useful_starts"]) - MARGIN + (int(sys.argv[2]) if len(sys.argv) > 2 else 0)   # 第 2 引数: 刺激の前に流した無音サンプル数
 ev = []
 for line in (d / "sync_events.txt").read_text().splitlines():
     m = re.match(r"start (\d+) locked (\d) cfo_inc (-?\d+) peak (\d+) at (\d+)", line)

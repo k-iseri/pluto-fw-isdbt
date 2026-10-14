@@ -30,12 +30,15 @@ BootROM → vendor FSBL → vendor u-boot ──(公式 bit を PL へ)──→
 ```
 cd plutosdr-fw
 R=/path/to/pluto-fw-isdbt
-rm -f build/system_top.xsa build/system_top.bit     # XSA を差し替えるとき
+rm -f build/system_top.xsa build/system_top.bit     # XSA を差し替えるとき（必須。下記）
 env -i HOME=$HOME PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   PLUTO_EXTRA_OVERLAY=$R/overlay PLUTO_EXTRA_POST_BUILD=$R/scripts/br-post-build.sh SKIP_LEGAL=1 \
   make VIVADO_SETTINGS=/nonexistent XSA_FILE=hdl/projects/pluto_nano/pluto_nano.sdk/system_top.xsa \
        build/pluto.frm build/pluto.dfu
 ```
+- **`build/system_top.xsa` は Makefile の order-only 依存（`build/system_top.xsa: | build`）なので、一度できると
+  XSA_FILE が新しくなっても再コピーされず、古い bit の frm が黙ってできる。**PL を変えたら必ず上の `rm -f` を先に実行する
+  （2026-10-14 に診断レジスタ入りのつもりで旧 bit を書き込み、1 回分無駄にした）
 - `XSA_FILE=...`: 自前ビルドの XSA を使う（2026-10-14 の r3b 以降）。itb に自前の bit が入り、ベンダー u-boot が
   起動時にロードするので **Linux での PL 再ロード（S22fpga）は不要**になった。S22fpga は overlay に
   `lib/firmware/pluto-pl.bin` があるときだけ動く退路として残してあり、AD9361 が probe 済みなら何もしない

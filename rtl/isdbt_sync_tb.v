@@ -10,6 +10,8 @@
 module isdbt_sync_tb;
   localparam N = 8192, NG = 1024, T = 9216;
   parameter MODE = 2;              // 2 = 16bit ビン、3 = 8bit ビン
+  parameter ZERO_PREFIX = 0;       // 刺激の前に流す無音サンプル数（無音で固まらないことの確認）
+  parameter GAP = 0;               // > 0 なら刺激の後に GAP 個の無音を挟んでもう一度刺激を流す（復帰の確認）
   reg clk = 0; always #5 clk = ~clk;
   reg rst = 1, enable = 0;
   reg adc_valid = 0;
@@ -84,6 +86,10 @@ module isdbt_sync_tb;
     fcorr = $fopen("sync_corr.txt", "w");
     #50 rst = 0;
     #50 enable = 1;
+    repeat (ZERO_PREFIX) begin
+      @(posedge clk);
+      adc_valid <= 1; adc_i <= 0; adc_q <= 0; sample_count <= ns; ns = ns + 1;
+    end
     r = $fscanf(fin, "%h %h", a, b);
     while (r == 2) begin
       @(posedge clk);
@@ -91,9 +97,24 @@ module isdbt_sync_tb;
       r = $fscanf(fin, "%h %h", a, b);
     end
     $display("read stopped: r=%0d after %0d samples, last a=%0d b=%0d", r, ns, a, b);
+    if (GAP > 0) begin
+      repeat (GAP) begin
+        @(posedge clk);
+        adc_valid <= 1; adc_i <= 0; adc_q <= 0; sample_count <= ns; ns = ns + 1;
+      end
+      $fclose(fin);
+      fin = $fopen("sync_stim.txt", "r");
+      r = $fscanf(fin, "%h %h", a, b);
+      while (r == 2) begin
+        @(posedge clk);
+        adc_valid <= 1; adc_i <= a; adc_q <= b; sample_count <= ns; ns = ns + 1;
+        r = $fscanf(fin, "%h %h", a, b);
+      end
+      $display("second pass done after %0d samples", ns);
+    end
     @(posedge clk); adc_valid <= 0;
     repeat (30000) @(posedge clk);
-    $display("samples=%0d frames=%0d overrun=%0d lock_losses=%0d locked=%0d cfo_inc=%0d", ns, frames, overrun, lock_losses, locked, cfo_inc);
+    $display("samples=%0d frames=%0d overrun=%0d lock_losses=%0d locked=%0d cfo_inc=%0d acq_fail=%0d", ns, frames, overrun, lock_losses, locked, cfo_inc, sync.acq_fail);
     $fclose(fin); $fclose(fev); $fclose(fout); $fclose(fcorr);
     $finish;
   end
