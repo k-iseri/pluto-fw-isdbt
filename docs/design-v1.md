@@ -222,4 +222,5 @@ linux パッチ = GPL-2.0 / hdl 改変 = ADI デュアル。
 | r1 | 公式設計 + 実測 XDC（16bit） | ad9361 初期化 OK、MER 25 dB / 17 Mbps / bad 0 |
 | r2 | + pack8（シフト 4）+ 8bit 申告 + カーネルパッチ | `le:S8/8` を申告、ホスト自動適応、公称 8.127 MSPS で MER 23 dB / bad 0 |
 | r3 | + サンプルカウンタ + 前置ゲイン（シフト 3） | MAGIC/VERSION/FORMAT=3 読み出し OK、CNT・DROP_CNT が動作。飽和試験（ホストが 20 MSPS を指定、8bit で 40 MB/s > USB 2.0）: 到着 15.83 MSPS に対し DROP_CNT×2 = 4.1M サンプル/s で差分と一致（定量化の検証）。OVF_CNT はビートごとに立つパルスを数えるので DROP_CNT と同値になる（バースト回数ではない）。公称 8.127 MSPS（rx_rate 8,126,756）で **MER 24.5〜25.8 dB**（16bit と同等に回復）、hw_dropped 0 / hw_ovf_events 0 / bad 0、AGC は −24 dBFS・26 dB（16bit 時と同じ値 = スケール申告が正しい） |
+| r3b | r3 と同じ PL を itb に同梱（S22fpga の再ロード無し） | 起動時に一発 probe。**30 分連続受信**: hw_dropped 0 / hw_ovf 0 / rx_slow 0 / frames_lost 0 / 再接続 0、rx_rate 8,126,7xx で安定。MER は 21.5〜23.6 dB（午前の 25 dB より低い）で RS 訂正不能が谷でバースト。同時間帯の A/B（r1 16bit → r3b 8bit、各 75 秒）で MER 平均 23.8 vs 24.1 dB、どちらも同程度の bad sync → **8bit 化の影響ではなく信号側の変動**。温度: AD936x 36.8 °C、Zynq 49.6 °C（30 分後） |
 - 7010 の資源: v1 の追加分（pack8 + counter）は数百 LUT 規模で問題なし。
