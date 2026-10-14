@@ -39,7 +39,7 @@ module isdbt_sync_tb;
     .locked(locked), .cfo_inc(cfo_inc), .peak_mag2(peak_mag2), .lock_losses(lock_losses), .status_word(status_word));
 
   wire r_valid; wire signed [15:0] r_i, r_q; wire [31:0] r_idx;
-  isdbt_rotate rot (
+  isdbt_rotate_lut rot (
     .clk(clk), .mode((enable ? MODE[3:0] : 4'd0)), .valid_in(adc_valid), .x_in(adc_i), .y_in(adc_q), .phase_in(nco_phase), .idx_in(sample_count[31:0]),
     .valid_out(r_valid), .x_out(r_i), .y_out(r_q), .idx_out(r_idx));
 

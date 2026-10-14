@@ -99,24 +99,31 @@ module isdbt_eq #(
   end
 
   // ---- シンボル BRAM（8192 × {Q13, I13}）と履歴 BRAM（8 スロット × 512 × {Q13, I13}）----
-  (* ram_style = "block" *) reg   [25:0]  sym_mem [0:N-1];      // 属性なしだと分散 RAM（LUT 4.6k）に落ちる
+  // 8K × 26 は 1 配列だと block 指定が infeasible と言われ分散 RAM（LUT 4.6k）になるので 4K × 26 の 2 バンクに分ける
+  (* ram_style = "block" *) reg   [25:0]  sym_mem0 [0:N/2-1];
+  (* ram_style = "block" *) reg   [25:0]  sym_mem1 [0:N/2-1];
   (* ram_style = "block" *) reg   [25:0]  hist_mem [0:4095];
   reg   [7:0]   hist_exp [0:7];
   integer hi;
   initial begin
     for (hi = 0; hi < 4096; hi = hi + 1) hist_mem[hi] = 26'd0;
-    for (hi = 0; hi < N; hi = hi + 1) sym_mem[hi] = 26'd0;
+    for (hi = 0; hi < N / 2; hi = hi + 1) begin sym_mem0[hi] = 26'd0; sym_mem1[hi] = 26'd0; end
     for (hi = 0; hi < 8; hi = hi + 1) hist_exp[hi] = 8'd0;
   end
   reg   [12:0]  sym_raddr = 'd0;
-  reg   [25:0]  sym_rdata = 'd0;
   reg   [12:0]  sym_waddr = 'd0;
   reg   [25:0]  sym_wdata = 'd0;
   reg           sym_we = 1'b0;
+  reg   [25:0]  sym_rd0 = 'd0, sym_rd1 = 'd0;
+  reg           sym_rsel = 1'b0;
   always @(posedge clk) begin
-    sym_rdata <= sym_mem[sym_raddr];
-    if (sym_we) sym_mem[sym_waddr] <= sym_wdata;
+    sym_rd0 <= sym_mem0[sym_raddr[11:0]];
+    sym_rd1 <= sym_mem1[sym_raddr[11:0]];
+    sym_rsel <= sym_raddr[12];
+    if (sym_we && !sym_waddr[12]) sym_mem0[sym_waddr[11:0]] <= sym_wdata;
+    if (sym_we && sym_waddr[12]) sym_mem1[sym_waddr[11:0]] <= sym_wdata;
   end
+  wire  [25:0]  sym_rdata = sym_rsel ? sym_rd1 : sym_rd0;
   reg   [11:0]  hist_raddr = 'd0;
   reg   [25:0]  hist_rdata = 'd0;
   reg   [11:0]  hist_waddr = 'd0;
@@ -131,7 +138,7 @@ module isdbt_eq #(
   function signed [12:0] sat13(input signed [31:0] v);
     sat13 = (v > 4095) ? 13'sd4095 : (v < -4096) ? -13'sd4096 : v[12:0];
   endfunction
-  function [7:0] sat8s(input signed [43:0] v);
+  function [7:0] sat8s(input signed [55:0] v);
     sat8s = (v > 127) ? 8'd127 : (v < -128) ? 8'h80 : v[7:0];
   endfunction
   function [7:0] sat8u(input [31:0] v);
@@ -186,7 +193,7 @@ module isdbt_eq #(
   wire [12:0] base_bin_w = delta_s[12:0] - CENTER[12:0];           // (δ − 2808) mod N
   wire [12:0] car0_w = CENTER[12:0] - delta_s[12:0];               // ビン 0 のキャリア番号 (mod N)
   wire [3:0]  car0_mod12_w = car0_w % 12;
-  wire signed [27:0] ds_prod = delta_s * $signed({1'b0, hdr_start[12:0]});
+  (* use_dsp = "yes" *) wire signed [27:0] ds_prod = delta_s * $signed({1'b0, hdr_start[12:0]});
   wire [31:0] init_phase = -({19'd0, ds_prod[12:0]} << 19) - afc_phase;   // −(δ·s mod N)/N − φ_afc
   wire [31:0] cur_phase = a_first ? init_phase : a_phase;
   wire [12:0] cur_car = a_first ? car0_w : a_car;
@@ -305,17 +312,17 @@ module isdbt_eq #(
   reg  signed [15:0] at_x = 'd0, at_y = 'd0;
   wire              ph_valid;
   wire  [31:0]      ph_meas;
-  isdbt_atan2 i_atan2 (.clk(clk), .valid_in(at_valid), .x_in(at_x), .y_in(at_y), .valid_out(ph_valid), .angle_out(ph_meas));
+  isdbt_atan2_seq i_atan2 (.clk(clk), .valid_in(at_valid), .x_in(at_x), .y_in(at_y), .valid_out(ph_valid), .angle_out(ph_meas));
   reg   signed [31:0] cpe_phase = 'd0;   // turns
 
   // CSI 定数の逐次除算: K = ⌊(1872 << 34) / S⌋
-  reg   [63:0]  div_rem = 'd0;
+  reg   [45:0]  div_rem = 'd0;
   reg   [44:0]  div_num = 'd0;
-  reg   [39:0]  div_den = 'd0;
+  reg   [36:0]  div_den = 'd0;
   reg   [31:0]  div_q = 'd0;
   reg   [6:0]   div_cnt = 'd0;
   reg   [31:0]  csi_k = 'd0;
-  wire  [63:0]  div_sh = {div_rem[62:0], div_num[44]};
+  wire  [45:0]  div_sh = {div_rem[44:0], div_num[44]};
 
   // B2
   reg   [12:0]  b2_k = 'd0;
@@ -351,21 +358,30 @@ module isdbt_eq #(
   reg   [5:0]   e_clz = 'd0, e_clz2 = 'd0, e_clz3 = 'd0, e_clz4 = 'd0, e_clz5 = 'd0, e_clz6 = 'd0;
   reg   [31:0]  e_norm = 'd0;
   reg   [15:0]  inv_f = 'd0;
-  reg   signed [26:0] P_i = 'd0, P_q = 'd0, P5_i = 'd0, P5_q = 'd0;
-  reg   signed [43:0] PI_i = 'd0, PI_q = 'd0, SH_i = 'd0, SH_q = 'd0;
+  reg   signed [26:0] P_i = 'd0, P_q = 'd0, P5_i = 'd0, P5_q = 'd0, P6_i = 'd0, P6_q = 'd0;
+  reg   signed [55:0] PI_i = 'd0, PI_q = 'd0;
+  reg   [28:0]  inv_s = 'd0;           // inv << (clz − 6)（clz ≥ 6。|H|² < 2^26）
   reg   [43:0]  csi_m = 'd0, csi_m2 = 'd0;
   reg   [7:0]   d8_i = 'd0, d8_q = 'd0, c8 = 'd0;
   reg           out_v = 1'b0;
-  wire  [5:0]   sh_amt = 6'd41 - e_clz4;   // (42 − clz) − 1: 丸めのため 1 ビット残して次段で +1 >> 1
 
   // 出力バイトパッカー → 小 FIFO（16 ワード）
   reg   [31:0]  of_mem [0:15];
   reg           of_last [0:15];
+  reg           of_we = 1'b0;
+  reg   [3:0]   of_waddr = 'd0;        // of_we と同時に確定（of_wr は同じ端で進むので直接使えない）
+  reg   [31:0]  of_wdata = 'd0;
+  reg           of_wlast = 1'b0;
   reg   [4:0]   of_wr = 'd0, of_rd = 'd0;
-  wire          of_empty = (of_wr == of_rd);
-  wire          of_full = ((of_wr - of_rd) == 5'd16);
+  reg   [4:0]   of_wr_vis = 'd0;       // 書き込み完了後に進む（読み側が見るポインタ。of_wr は 1 サイクル先行）
+  wire          of_empty = (of_wr_vis == of_rd);
+  wire          of_full = ((of_wr - of_rd) >= 5'd15);
   reg   [23:0]  pk_bytes = 'd0;
   reg   [1:0]   pk_n = 'd0;
+  always @(posedge clk) begin
+    if (of_we) begin of_mem[of_waddr] <= of_wdata; of_last[of_waddr] <= of_wlast; end
+    of_wr_vis <= (rst || !enable) ? 5'd0 : (of_we ? of_wr_vis + 1'b1 : of_wr_vis);
+  end
   assign o_valid = !of_empty;
   assign o_data = of_mem[of_rd[3:0]];
   assign o_last = of_last[of_rd[3:0]];
@@ -374,6 +390,7 @@ module isdbt_eq #(
     hist_we <= 1'b0;
     at_valid <= 1'b0;
     b1_v1 <= 1'b0;
+    of_we <= 1'b0;
     if (rst || !enable) begin
       state <= S_IDLE;
       slot <= 'd0;
@@ -454,7 +471,7 @@ module isdbt_eq #(
             cpe_phase <= (cpe_en && hist_fill == 3'd4) ? $signed(ph_meas) : 32'sd0;
             cpe_phase_dbg <= ph_meas[31:20];
             div_num <= 45'd1872 << 34;
-            div_den <= s_total[40] ? 40'd0 : s_total[39:0];
+            div_den <= (s_total[40] || s_total[39:37] != 3'd0) ? 37'h1FFFFFFFFF : s_total[36:0];
             div_rem <= 'd0;
             div_q <= 'd0;
             div_cnt <= 'd0;
@@ -463,8 +480,8 @@ module isdbt_eq #(
         end
         S_DIV: begin
           if (div_cnt < 7'd45) begin
-            if (div_sh >= {24'd0, div_den}) begin
-              div_rem <= div_sh - {24'd0, div_den};
+            if (div_sh >= {9'd0, div_den}) begin
+              div_rem <= div_sh - {9'd0, div_den};
               div_q <= {div_q[30:0], 1'b1};
             end else begin
               div_rem <= div_sh;
@@ -526,9 +543,10 @@ module isdbt_eq #(
         end
         S_FLUSH: begin
           if (!of_full) begin
-            of_mem[of_wr[3:0]] <= (pk_n == 2'd0) ? 32'd0 : (pk_n == 2'd1) ? {24'd0, pk_bytes[7:0]} :
-                                  (pk_n == 2'd2) ? {16'd0, pk_bytes[15:0]} : {8'd0, pk_bytes[23:0]};
-            of_last[of_wr[3:0]] <= 1'b1;
+            of_we <= 1'b1; of_waddr <= of_wr[3:0];
+            of_wdata <= (pk_n == 2'd0) ? 32'd0 : (pk_n == 2'd1) ? {24'd0, pk_bytes[7:0]} :
+                        (pk_n == 2'd2) ? {16'd0, pk_bytes[15:0]} : {8'd0, pk_bytes[23:0]};
+            of_wlast <= 1'b1;
             of_wr <= of_wr + 1'b1;
             pk_n <= 'd0;
             afc_phase <= afc_phase + afc_omega;
@@ -597,19 +615,19 @@ module isdbt_eq #(
       // 段 6: 逆数表
       inv_f <= recip_rom[e_norm[30:21]];
       e_clz3 <= e_clz2; E4 <= E3; P5_i <= P_i; P5_q <= P_q;
-      // 段 7: × inv（{1, f} 17bit）、CSI
-      PI_i <= P5_i * $signed({2'b01, inv_f});
-      PI_q <= P5_q * $signed({2'b01, inv_f});
+      // 段 7: inv を (clz − 6) ビット左へ（最大 2^26 倍 → 29bit）。44bit のバレルシフタより小さい
+      inv_s <= {12'd0, 1'b1, inv_f} << ((e_clz3 < 6'd6) ? 6'd0 : (e_clz3 - 6'd6));
+      P6_i <= P5_i; P6_q <= P5_q;
       csi_m <= E4[26:8] * csi_k;
       e_clz4 <= e_clz3;
-      // 段 8: シフト（42 − clz − 1）
-      SH_i <= PI_i >>> sh_amt;
-      SH_q <= PI_q >>> sh_amt;
+      // 段 8: × inv_s（27bit × 29bit）。D8 = P·inv·2^(clz−42) = PI >> 36
+      PI_i <= P6_i * $signed({1'b0, inv_s});
+      PI_q <= P6_q * $signed({1'b0, inv_s});
       csi_m2 <= csi_m;
       e_clz5 <= e_clz4;
       // 段 9: 丸め（+1 >> 1）と 8bit 化。|H|² = 0（clz = 32）なら 0
-      d8_i <= (e_clz5 == 6'd32) ? 8'd0 : sat8s((SH_i + 44'sd1) >>> 1);
-      d8_q <= (e_clz5 == 6'd32) ? 8'd0 : sat8s((SH_q + 44'sd1) >>> 1);
+      d8_i <= (e_clz5 == 6'd32) ? 8'd0 : sat8s((PI_i + 56'sd34359738368) >>> 36);
+      d8_q <= (e_clz5 == 6'd32) ? 8'd0 : sat8s((PI_q + 56'sd34359738368) >>> 36);
       c8 <= (e_clz5 == 6'd32) ? 8'd0 : sat8u(csi_m2[43:20] > 24'd255 ? 32'd255 : {8'd0, csi_m2[43:20]});
       out_v <= p_v[8];
       // 段 10: パッカー（キャリアごとに 3 バイト、4 キャリアで 3 ワード）
@@ -618,24 +636,21 @@ module isdbt_eq #(
           2'd0: begin pk_bytes <= {c8, d8_q, d8_i}; pk_n <= 2'd3; end
           2'd3: begin
             if (!of_full) begin
-              of_mem[of_wr[3:0]] <= {d8_i, pk_bytes};
-              of_last[of_wr[3:0]] <= 1'b0;
+              of_we <= 1'b1; of_waddr <= of_wr[3:0]; of_wdata <= {d8_i, pk_bytes}; of_wlast <= 1'b0;
               of_wr <= of_wr + 1'b1;
             end
             pk_bytes[15:0] <= {c8, d8_q}; pk_n <= 2'd2;
           end
           2'd2: begin
             if (!of_full) begin
-              of_mem[of_wr[3:0]] <= {d8_q, d8_i, pk_bytes[15:0]};
-              of_last[of_wr[3:0]] <= 1'b0;
+              of_we <= 1'b1; of_waddr <= of_wr[3:0]; of_wdata <= {d8_q, d8_i, pk_bytes[15:0]}; of_wlast <= 1'b0;
               of_wr <= of_wr + 1'b1;
             end
             pk_bytes[7:0] <= c8; pk_n <= 2'd1;
           end
           2'd1: begin
             if (!of_full) begin
-              of_mem[of_wr[3:0]] <= {c8, d8_q, d8_i, pk_bytes[7:0]};
-              of_last[of_wr[3:0]] <= 1'b0;
+              of_we <= 1'b1; of_waddr <= of_wr[3:0]; of_wdata <= {c8, d8_q, d8_i, pk_bytes[7:0]}; of_wlast <= 1'b0;
               of_wr <= of_wr + 1'b1;
             end
             pk_n <= 2'd0;

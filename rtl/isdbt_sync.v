@@ -97,7 +97,7 @@ module isdbt_sync #(
   reg  signed [15:0] at_x = 'd0, at_y = 'd0;
   wire              ph_valid;
   wire  [31:0]      ph_meas;
-  isdbt_atan2 i_atan2 (
+  isdbt_atan2_seq i_atan2 (
     .clk (clk), .valid_in (at_valid), .x_in (at_x), .y_in (at_y),
     .valid_out (ph_valid), .angle_out (ph_meas));
   reg   signed [31:0] cfo_acc = 'd0;

@@ -49,9 +49,10 @@ module isdbt_eq_tb;
   always @(posedge clk) if (dut.state == 4'd5 && nsym < 12)
     $display("sym %0d: slot %0d acc_re %0d acc_im %0d acc_hh %0d acc_h4 %0d sp %0d", nsym, dut.slot, dut.acc_re, dut.acc_im, dut.acc_hh, dut.acc_h4, dut.sp_phase);
 
-  reg [3:0] st_d = 0;
+  reg [3:0] st_d = 0; integer ntrans = 0;
   always @(posedge clk) begin
     st_d <= dut.state;
+    if (dut.state != st_d && ntrans < 60) begin ntrans = ntrans + 1; $display("t=%0t state %0d -> %0d of_wr %0d of_rd %0d o_valid %0d nwords %0d", $time, st_d, dut.state, dut.of_wr, dut.of_rd, o_valid, nwords); end
     if (dut.state == 4'd8 && st_d == 4'd7 && nsym < 12) $display("sym %0d: csi_k %0d div_den %0d s_total %0d", nsym, dut.csi_k, dut.div_den, dut.s_total);
     if (dut.state == 4'd8 && dut.p_v[8] && dut.b2_k == 13'd2000 && nsym < 12) $display("   k~2000: E4 %0d csi_m2 %0d c8 %0d e_clz5 %0d", dut.E4, dut.csi_m2, dut.c8, dut.e_clz5);
   end
@@ -75,7 +76,7 @@ module isdbt_eq_tb;
       r = $fscanf(fin, "H %h %h %h\n", hs, hd, hx);
     end
     repeat (40000) @(posedge clk);
-    $display("done: %0d symbols output, overrun %0d", nsym, dbg[25]);
+    $display("done: %0d symbols output, overrun %0d, nwords %0d nb %0d", nsym, dbg[25], nwords, nb);
     $fclose(fin); $fclose(fout);
     $finish;
   end
