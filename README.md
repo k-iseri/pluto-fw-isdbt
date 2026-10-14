@@ -6,6 +6,10 @@ PlutoSDR 互換機（Zynq-7010 + AD9363）を ISDB-T 受信専用チューナー
 （純正ファームでも動くが、本ファームで USB 2.0 の帯域余裕と障害検出が改善する）。
 
 **状態: 設計段階。** 設計は [docs/design-v1.md](docs/design-v1.md) を参照。
+対象基板（HamGeek PlutoSDR Nano、XC7Z010-**CLG400**）の AD9361 ピン配置は公式 Pluto と全く違うので
+JTAG バウンダリスキャンで実測した（[docs/pinout-nano.md](docs/pinout-nano.md)、
+XDC は [hdl/plutosdr-nano/system_constr.xdc](hdl/plutosdr-nano/system_constr.xdc)、
+スクリプトは [scripts/bscan/](scripts/bscan/)）。
 
 ## ロードマップ
 
