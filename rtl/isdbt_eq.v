@@ -203,10 +203,18 @@ module isdbt_eq #(
   wire        cur_is_grid = (cur_car < TOTAL) && (cur_cm == 4'd0 || cur_cm == 4'd3 || cur_cm == 4'd6 || cur_cm == 4'd9);
   wire [1:0]  cur_pidx = (cur_cm == 4'd0) ? 2'd0 : (cur_cm == 4'd3) ? 2'd1 : (cur_cm == 4'd6) ? 2'd2 : 2'd3;
   // 窓開始の差から飛んだシンボル数（0〜3）。同期が窓を欠かしたときも位相の予測と履歴の年齢を合わせる
+  // タイミング: hdr_start（他モジュールの FIFO 読み出しマルチプレクサ経由）からの長い組合せ経路を切るため、
+  // 飛んだシンボル数と「次に使う位相・スロット」は毎サイクル登録しておき、a_first ではレジスタ値を使う
   wire [31:0] start_diff = hdr_start - prev_start;
-  wire [1:0]  n_skip = (start_diff < 32'd13824) ? 2'd0 : (start_diff < 32'd23040) ? 2'd1 : (start_diff < 32'd32256) ? 2'd2 : 2'd3;
-  wire [1:0]  sp_use_w = a_first ? (sp_pred + n_skip) : sp_use;
-  wire [3:0]  slot_cur = a_first ? (slot_a + {2'b0, n_skip}) : slot_a;
+  reg   [1:0]   n_skip_r = 'd0;
+  reg   [1:0]   sp_next = 'd0;
+  reg   [3:0]   slot_next = 'd0;
+  always @(posedge clk) begin
+    n_skip_r <= (start_diff < 32'd13824) ? 2'd0 : (start_diff < 32'd23040) ? 2'd1 : (start_diff < 32'd32256) ? 2'd2 : 2'd3;
+    sp_next <= sp_pred + n_skip_r;
+    slot_next <= slot_a + {2'b0, n_skip_r};
+  end
+  wire [1:0]  sp_use_w = a_first ? sp_next : sp_use;
   wire        cur_is_sp = cur_is_grid && (cur_pidx == sp_use_w) && sp_known;   // 予測位相の SP（受信中 SP パスの対象）
   wire [8:0]  cur_m = a_first ? car0_div12_w : a_m;    // = ⌊cur_car/12⌋（SP の履歴添字 m = (k − 3p)/12 = ⌊k/12⌋）
 
@@ -227,7 +235,7 @@ module isdbt_eq #(
   reg           sgn2 = 1'b0, sgn3 = 1'b0;
   reg   signed [12:0] hsp3_i = 'd0, hsp3_q = 'd0, hsp4_i = 'd0, hsp4_q = 'd0;
   reg   signed [12:0] h4_i = 'd0, h4_q = 'd0;
-  wire  [3:0]   slot_a4 = slot_cur - 4'd4;
+  wire  [3:0]   slot_a4 = slot_a - 4'd4;          // 最初の SP の読みは a_first の次のサイクル以降（slot_a は更新済み）
   wire signed [8:0] exp_d4 = $signed({1'b0, hist_exp[slot_a4]}) - $signed({1'b0, exp_a});
   reg   signed [39:0] acc_re = 'd0, acc_im = 'd0;
   reg   [39:0]  acc_hh = 'd0, acc_h4 = 'd0;
@@ -273,9 +281,9 @@ module isdbt_eq #(
           a_first <= 1'b0;
           a_known <= sp_known;
           sp_use <= sp_use_w;
-          slot_a <= slot_cur;                           // 飛んだシンボルのスロットは古いまま飛ばす
+          slot_a <= slot_next;                          // 飛んだシンボルのスロットは古いまま飛ばす
           prev_start <= hdr_start;
-          hist_exp[slot_cur] <= m_tuser[23:16];
+          hist_exp[slot_next] <= m_tuser[23:16];
           acc_re <= 'd0; acc_im <= 'd0; acc_hh <= 'd0; acc_h4 <= 'd0;
         end
         rotA_sc <= sincos_rom[cur_phase[31:22]];
