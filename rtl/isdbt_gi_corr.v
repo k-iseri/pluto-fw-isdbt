@@ -97,8 +97,13 @@ module isdbt_gi_corr #(
       v4 <= v3;
       if (v3) begin
         if (warm < N + NG) warm <= warm + 1'b1;
-        acc_re <= acc_re + p_re2 - ((warm >= N + NG) ? pold_re : 17'sd0);
-        acc_im <= acc_im + p_im2 - ((warm >= N + NG) ? pold_im : 17'sd0);
+        // 足すのは遅延線が埋まってから（warm ≥ N）。リセット直後の N 個の積は x · conj(古い遅延線の内容) で、
+        // これを足してしまうと引き算（warm ≥ N + NG から）が決して取り除かず、移動和に一定の複素オフセットが
+        // 一生残る。オフセットは信号レベルに依らないので、弱い信号ほど相関ピークの位相（= CFO 推定）を傾け、
+        // 等化モードで残留 CFO → ICI になっていた（実波: ゲイン 24 dB で +41 Hz、B 層 MER −4 dB。2026-10-15）。
+        // シミュレーションは BRAM 初期値 0 で積も 0 だったため見えなかった
+        acc_re <= acc_re + ((warm >= N) ? p_re2 : 17'sd0) - ((warm >= N + NG) ? pold_re : 17'sd0);
+        acc_im <= acc_im + ((warm >= N) ? p_im2 : 17'sd0) - ((warm >= N + NG) ? pold_im : 17'sd0);
       end
     end
   end
