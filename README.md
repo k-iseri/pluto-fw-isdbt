@@ -50,7 +50,8 @@ PlutoSDR 互換機を ISDB-T / ISDB-C 受信用チューナーとして使うた
 |---|---|---|
 | 純正（16bit） | 従来どおり | 従来どおり（7/8 レート） |
 | pluto-fw-isdbt v1.0.0（8bit） | **不可**（サンプルサイズ 2 を拒否） | 公称レート + `hw_dropped` |
-| pluto-fw-isdbt v2.0.0（8bit + FPGA 前段） | **不可** | v1.2.x: v1.0.0 と同じ動作。**v1.3.0 以降: FPGA 前段を自動で使用**（CPU 2.7 → 1.1 コア、v1.4.1 以降は 0.3 コア） |
+| pluto-fw-isdbt v2.0.0（8bit + FPGA 前段） | **不可** | v1.2.x: v1.0.0 と同じ動作。**v1.3.0 以降: FPGA 前段を自動で使用**（CPU 2.7 → 1.1 コア、v1.4.1 以降は 0.3 コア）。v1.3.0 は 528 秒で映像が止まる（v1.3.1 で対処） |
+| pluto-fw-isdbt v2.0.1（窓開始 64bit、ADC レベル計） | **不可** | v2.0.0 と同じ。v1.3.1 以降なら長時間視聴とモード 3/4 中の AGC 追従も効く。**推奨の組み合わせ: v2.0.1 + BonDriver v1.4.2 以降** |
 
 ホストはファーム識別子ではなく scan-element の申告（`le:s8/8`）で動作を決める。
 FPGA 側の識別・統計レジスタ（MAGIC "ISDB"、`0x3000`）の内容は [rtl/isdbt_regs.v](rtl/isdbt_regs.v) の先頭（v2。VERSION / CAPS で判別）。
