@@ -1,5 +1,35 @@
 # リリースノート
 
+## v2.0.2（2026-10-15）
+
+v2.0.1 の修正版。配布物は `pluto-fw-isdbt-v2.0.2-nano-8bit.frm` / `.dfu` / `SHA256SUMS.txt`。
+
+### 変更点
+
+- **弱い入力で FPGA 前段（等化モード）の MER が raw ホスト復調より落ちる問題を修正**（`rtl/isdbt_gi_corr.v`）。
+  GI 相関器の移動和に、コアのリセット直後の 8192 個の積（古い遅延線との積）の和が一定の複素オフセットとして
+  起動後ずっと残っていた。オフセットは信号レベルに依らないので、信号が弱いほど相関ピークの位相 = 小数 CFO の推定が
+  傾き（27ch ゲイン 24 dB で +83 Hz、真値 +42 Hz）、FFT 前に補正されない残留 CFO が ICI になって B 層が
+  raw より 4〜8 dB 悪かった。修正後は推定 +41 Hz、B 層 MER は raw 25.3 に対し 24.0 dB（差 4.3 → 1.3 dB）、
+  A 層は FPGA 28.4 / raw 24.4 dB。切り分けの記録は [docs/design-v2.md](design-v2.md) 3g
+- テストベンチ `rtl/isdbt_gi_corr_tb.v` に「遅延線に内容が残った状態での再リセット」の自己検査を追加（旧 RTL は FAIL）
+- `fw_version` は `v0.39-isdbt-2.0.2`。レジスタ・出力形式・必要なホストは v2.0.1 と同じ（VERSION 4、CAPS 0x1F。
+  BonDriver_PlutoSDR v1.3.1 以降）。FPGA のタイミングは WNS +0.48 ns
+- 残る raw との差（B 層で 1〜3 dB、レベルに依らない）は等化器の設計差（3 キャリア格子の線形補間、直近 2 シンボル平均）で、
+  v2.0.2 の対象外
+
+### チェックサム
+
+```
+e9bc5b885623b354546735fcfda971487b9f8101df15b7ae3d518a870b5cb3a6  pluto-fw-isdbt-v2.0.2-nano-8bit.frm
+40f38eb46402b8908e669eef29dfc86427d461a6e7c93e1d4243e91b68f0bb94  pluto-fw-isdbt-v2.0.2-nano-8bit.dfu
+```
+
+### ソース
+
+- このリポジトリ タグ `v2.0.2`
+- plutosdr-fw フォーク タグ `v0.39-isdbt-2.0.2`（hdl・linux は v2.0.1 と同じ。rtl の isdbt_gi_corr だけが変わった）
+
 ## v2.0.1（2026-10-15）
 
 v2.0.0 の修正版。配布物は `pluto-fw-isdbt-v2.0.1-nano-8bit.frm` / `.dfu` / `SHA256SUMS.txt`（内容は v2.0.0 と同じ構成）。
