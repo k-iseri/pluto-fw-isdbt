@@ -14,7 +14,7 @@ module isdbt_fe_xfft_tb;
   reg enable = 0;
   reg [15:0] stride = STRIDE, offset = 16'd100;
   reg [7:0] decim = 8'd1;
-  reg [63:0] sample_count = 64'd0;
+  reg [63:0] sample_count = 64'hFFFF_C568;   // 2^32 − 15000: 第 1 段階の 3 窓目の開始（+18532）が下位 32bit の一周をまたぐ
   reg adc_valid = 0;
   reg [15:0] adc_i = 0, adc_q = 0;
 
@@ -61,8 +61,11 @@ module isdbt_fe_xfft_tb;
   reg [31:0] lfsr = 32'h1234567;
   function [15:0] sgn12(input [31:0] v); sgn12 = {{4{v[11]}}, v[11:0]}; endfunction
 
-  // DMA 語列のフレーム長検査: magic から次の magic までが 8 + N 語であること
-  integer wc = 0, bad_len = 0, n_magic = 0;
+  // DMA 語列のフレーム長検査: magic から次の magic までが 8 + N 語であること。
+  // ヘッダの開始サンプル番号（w2/w3、64bit）が 9216 ずつ増えること（下位 32bit の一周をまたいでも）
+  integer wc = 0, bad_len = 0, n_magic = 0, bad_start = 0;
+  reg [63:0] start64 = 0, prev_start64 = 0;
+  reg [31:0] w2 = 0;
   always @(posedge clk) begin
     if (s_tvalid && !s_tready) n_tr_low <= n_tr_low + 1;
     if (ev_tlu || ev_tlm || ev_halt) n_ev <= n_ev + 1;
@@ -76,6 +79,16 @@ module isdbt_fe_xfft_tb;
         n_magic = n_magic + 1;
         wc = 1;
       end else begin
+        if (wc == 2) w2 = dma_data;
+        if (wc == 3) begin
+          start64 = {dma_data, w2};
+          $display("frame %0d: start %0d (0x%0h)", n_magic - 1, start64, start64);
+          if (n_magic > 1 && n_magic <= 3 && start64 != prev_start64 + STRIDE) begin
+            bad_start = bad_start + 1;
+            $display("  start not monotonic: prev %0d", prev_start64);
+          end
+          prev_start64 = start64;
+        end
         wc = wc + 1;
       end
     end
@@ -113,9 +126,9 @@ module isdbt_fe_xfft_tb;
     feed(3 * STRIDE);
     adc_valid <= 0;
     repeat (20000) @(posedge clk);
-    $display("phase 2: frames=%0d magic=%0d bad_len=%0d events=%0d fifo_ovf=%0d", frames, n_magic, bad_len, n_ev, fovf);
-    if (n_magic != 6 || bad_len != 0) $display("FAIL: expected 6 well-formed frames");
-    else $display("PASS: framing realigned after mode 0");
+    $display("phase 2: frames=%0d magic=%0d bad_len=%0d bad_start=%0d events=%0d fifo_ovf=%0d", frames, n_magic, bad_len, bad_start, n_ev, fovf);
+    if (n_magic != 6 || bad_len != 0 || bad_start != 0) $display("FAIL: expected 6 well-formed frames with monotonic 64-bit starts");
+    else $display("PASS: framing realigned after mode 0, 64-bit start across the 2^32 wrap");
     $fclose(fin); $fclose(fout);
     $finish;
   end

@@ -31,7 +31,9 @@ module isdbt_fe_win #(
   input       [15:0]      stride,
   input       [15:0]      offset,
   input       [7:0]       decim,
-  input       [63:0]      sample_count,    // adc_valid のサンプルに対応するサンプル番号（同じ遅延で揃っていること）
+  input       [63:0]      sample_count,    // adc_valid のサンプルに対応するサンプル番号（同じ遅延で揃っていること）。
+                                           // 下位 32bit だけを使う（上位は無視し、周回を数えて自前で作る。ブロックデザインでは
+                                           // 回転器の idx_out（32bit）に 0 を連結して渡している）
 
   input                   adc_valid,
   input       [15:0]      adc_i,
@@ -101,6 +103,12 @@ module isdbt_fe_win #(
   reg   [7:0]   decim_cnt = 'd0;
   reg   [31:0]  seq = 'd0;
   reg           enable_d = 1'b0;
+  // サンプル番号の上位 32bit: 下位 32bit（8.127 MSPS で 528 秒ごとに一周）の周回を数える。v2.0.0 までは上位が常に 0 で
+  // ホスト側の継ぎ合わせが一周のたびに止まった（BonDriver v1.3.1 で周回補正。2026-10-15）
+  reg   [31:0]  idx_hi = 'd0;
+  reg   [31:0]  idx_lo_prev = 'd0;
+  reg           idx_prev_valid = 1'b0;
+  wire  [63:0]  sample_count64 = {idx_hi, sample_count[31:0]};
   reg           win_bad = 1'b0;       // この窓で FFT が受け取れなかった
 
   // ヘッダ FIFO（小さいのでレジスタ）
@@ -167,6 +175,8 @@ module isdbt_fe_win #(
 
   always @(posedge clk) begin
     if (rst || !enable) begin
+      idx_hi <= 'd0;
+      idx_prev_valid <= 1'b0;
       pos <= 'd0;
       next_start <= {16'd0, offset};
       in_win <= 'd0;
@@ -186,6 +196,9 @@ module isdbt_fe_win #(
       sf_push = 1'b0;
       sf_din = {1'b0, adc_q_s, adc_i_s};
       if (adc_valid) begin
+        idx_lo_prev <= sample_count[31:0];
+        idx_prev_valid <= 1'b1;
+        if (idx_prev_valid && sample_count[31:0] < idx_lo_prev) idx_hi <= idx_hi + 1'b1;
         pos <= pos + 1'b1;
         if (in_win != 0) begin
           // 窓の途中
@@ -203,7 +216,7 @@ module isdbt_fe_win #(
             sf_push = 1'b1;
             in_win <= N - 1;
             win_bad <= 1'b0;
-            hf_start[hf_wr_i] <= sample_count;
+            hf_start[hf_wr_i] <= (idx_prev_valid && sample_count[31:0] < idx_lo_prev) ? {idx_hi + 1'b1, sample_count[31:0]} : sample_count64;
             hf_seq[hf_wr_i] <= seq;
             hf_delta[hf_wr_i] <= sync_mode ? st_head_delta : 32'd0;
             hf_wr <= hf_wr + 1'b1;
