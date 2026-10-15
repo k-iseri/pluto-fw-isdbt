@@ -1,5 +1,66 @@
 # リリースノート
 
+## v2.0.0（2026-10-15）
+
+HamGeek PlutoSDR Nano（XC7Z010-CLG400 + AD9363）向け。GitHub Release の本文はこの節をそのまま使う。
+
+### 配布物
+
+| ファイル | 内容 |
+|---|---|
+| `pluto-fw-isdbt-v2.0.0-nano-8bit.frm` | **本命**。v1.0.0 の 8bit 転送 + サンプルカウンタに加えて、地デジの前段（GI 相関同期・8192 点 FFT・SP チャネル推定と等化）を FPGA で行い、等化済みキャリア（I/Q/CSI 各 8bit）を出力する。`pluto.frm` に改名してマスストレージ経由で書く |
+| `pluto-fw-isdbt-v2.0.0-nano-8bit.dfu` | 同じ内容の DFU 形式（通常は不要） |
+| `SHA256SUMS.txt` | チェックサム |
+
+純正相当（16bit）に戻すときは v1.0.0 の `pluto-fw-isdbt-v1.0.0-nano-16bit.frm` を使う（基板は同じ）。
+`boot.frm` は含まない（ベンダーのブートローダをそのまま使う。書き換え禁止）。
+
+### 必要なホスト
+
+BonDriver_PlutoSDR **v1.3.0 以降**で FPGA 前段が使われる（ini の `[SDR] FpgaEq=auto` が既定）。
+v1.2.x の DLL でも 8bit 転送のファームとして従来どおり動く（前段は使われない）。v1.1.x 以前は不可。
+
+### 中身
+
+- FPGA（`rtl/`、[docs/design-v2.md](docs/design-v2.md)）: 公式設計から axi_iic / axi_spi / axi_tdd を外して空けた
+  資源に、GI 相関同期（`isdbt_gi_corr` / `isdbt_sync`: 捕捉は 2 シンボルの周期性判定、追従は帰還なしの直線時間軸）、
+  CFO 回転器、Xilinx FFT 8192（12bit、ブロック浮動小数点）、SP 等化器（`isdbt_eq`: 受信中 SP パス + AFC + CPE +
+  線形補間、CSI 付き 8bit 出力、履歴 16 シンボル）、出力フレーマ、ADC レベル計を載せた。
+  LUT 約 82 %、BRAM 56/60、DSP 68/80（XC7Z010）
+- レジスタ（コア内 0x3000、MAGIC "ISDB"、**VERSION 4、CAPS 0x1F**）: MODE（0 raw / 3 同期 FFT 8bit / 4 等化済み
+  キャリア）、EQ_CTRL（整数 CFO δ、AFC / CPE 有効）、SYNC_STATUS / EQ_STATUS / EQ_OMEGA / TIM_EST / TIM_DELTA、
+  ADC_LEVEL（モード 3/4 中のホスト AGC 用）。レジスタ表は [rtl/isdbt_regs.v](rtl/isdbt_regs.v) の先頭
+- Linux / rootfs は v1.0.0 と同じ（dts から iic / spi / tdd を外した）。`fw_version` は `v0.39-isdbt-2.0.0`
+- 出力はモード 4 で 882 シンボル/s × 16.9 KB ≈ 14.9 MB/s（USB 2.0 で余裕あり）
+
+### 実機での結果（Nano、地デジ物理 24ch）
+
+- FPGA 前段 → ホスト後段（BonDriver v1.3.0）で MER A 26 / B 23 dB、RS 訂正不能 0、選局から約 5 秒でロック。
+  ホスト全段復調（raw）と同等の受信品質で、PC 側の CPU は 2.7 コア → 1.1 コア
+- TVTest で UHF の視聴・チャンネルスキャン、CATV（ISDB-C、こちらは raw のまま）の視聴を確認
+- 帯域内 −30 dBFS（AGC 目標を下げた弱信号相当）でもロック（MER 18〜19 dB。raw ホストは 23 dB で、低レベルでの差は未解明）
+
+### 既知の注意点
+
+- v1.0.0 と同じく、AD936x 内蔵の slow_attack AGC は 8bit + 前置ゲインでクリップする。BonDriver は自動でソフト AGC
+- モード 3 から 4 へ直接切り替えると時間軸がずれる。BonDriver はモード 0 を挟んで切り替える（他のソフトから
+  使う場合は `isdbt-sdr/tools/fe_eq_test.py` の手順に従う）
+- 本家 ADALM-PLUTO（clg225）には書かないこと（SDR が動かなくなる。純正 pluto.frm で戻せる）
+- TX 経路は公式設計のまま残っている（動作未確認。本プロジェクトでは使わない）
+
+### チェックサム
+
+```
+dd180ed4461a031fd70feb527c2bceb374a98a004b25702207ffb20d2c692cc7  pluto-fw-isdbt-v2.0.0-nano-8bit.frm
+3856572bc1f6117b7370d0ebd9f3654ae57b004727e24b13c874cfa152b4bd2d  pluto-fw-isdbt-v2.0.0-nano-8bit.dfu
+```
+
+### ソース
+
+- このリポジトリ タグ `v2.0.0`
+- plutosdr-fw フォーク タグ `v0.39-isdbt-2.0.0`（`5bc1562`。hdl `5fe9004`（ブランチ isdbt）、linux `f885cf9`、
+  buildroot / u-boot は v0.39 のまま）
+
 ## v1.0.0（2026-10-14）
 
 HamGeek PlutoSDR Nano（XC7Z010-CLG400 + AD9363）向け。GitHub Release の本文はこの節をそのまま使う。

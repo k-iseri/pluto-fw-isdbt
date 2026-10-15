@@ -21,7 +21,8 @@ PlutoSDR 互換機を ISDB-T / ISDB-C 受信用チューナーとして使うた
 
 ## インストール
 
-必要なもの: BonDriver_PlutoSDR **v1.2.0 以降**（古い DLL は 8bit の申告を受け付けない）。
+必要なもの: BonDriver_PlutoSDR **v1.2.0 以降**（古い DLL は 8bit の申告を受け付けない）。v2.0.0 の FPGA 前段
+（同期・FFT・等化。PC 側の復調負荷が約 2.7 コア → 1.1 コア）を使うには **v1.3.0 以降**（それ以前の DLL でも 8bit 転送として動く）。
 
 1. [Releases](https://github.com/k-iseri/pluto-fw-isdbt/releases) から `pluto-fw-isdbt-<版>-nano-8bit.frm` を取る
 2. **現在のファームを控える**（下記「戻し方」参照。Nano の純正ファームはメーカーが公開していない）
@@ -47,10 +48,11 @@ PlutoSDR 互換機を ISDB-T / ISDB-C 受信用チューナーとして使うた
 | ファーム | BonDriver v1.1.x 以前 | BonDriver v1.2.0 以降 |
 |---|---|---|
 | 純正（16bit） | 従来どおり | 従来どおり（7/8 レート） |
-| pluto-fw-isdbt（8bit） | **不可**（サンプルサイズ 2 を拒否） | 公称レート + `hw_dropped` |
+| pluto-fw-isdbt v1.0.0（8bit） | **不可**（サンプルサイズ 2 を拒否） | 公称レート + `hw_dropped` |
+| pluto-fw-isdbt v2.0.0（8bit + FPGA 前段） | **不可** | v1.2.x: v1.0.0 と同じ動作。**v1.3.0 以降: FPGA 前段を自動で使用**（CPU 2.7 → 1.1 コア） |
 
 ホストはファーム識別子ではなく scan-element の申告（`le:s8/8`）で動作を決める。
-FPGA 側の識別・統計レジスタ（MAGIC "ISDB"、`0x3000`）の内容は [rtl/isdbt_sample_counter.v](rtl/isdbt_sample_counter.v)。
+FPGA 側の識別・統計レジスタ（MAGIC "ISDB"、`0x3000`）の内容は [rtl/isdbt_regs.v](rtl/isdbt_regs.v) の先頭（v2。VERSION / CAPS で判別）。
 
 ## 中身
 
@@ -74,8 +76,9 @@ pluto-fw-isdbt/
 | 版 | 内容 | 状態 |
 |---|---|---|
 | v1.0 | 8bit 転送 + サンプルカウンタ（Nano） | **リリース**（2026-10-14。30 分連続受信でハードドロップ 0） |
+| v2.0 | 地デジ前段の FPGA 化（GI 相関同期・8192 点 FFT・SP 等化、等化済みキャリアを 8bit で出力。[docs/design-v2.md](docs/design-v2.md)） | **リリース**（2026-10-15。ch 24 で MER A 26 / B 23 dB、BonDriver v1.3.0 の CPU 2.7 → 1.1 コア） |
 | v1.x | 本家 Pluto / Pluto+ 向けビルド（検証者募集）、RX 専用化（必要なら） | 未着手 |
-| v2 | フル復調の FPGA 化（TS 直接出力）。Zynq-7020 機が本来の土俵 | 検討のみ |
+| v3 | 後段（デインターリーブ・ビタビ・RS）の FPGA 化（TS 直接出力）。Zynq-7020 機が本来の土俵 | 検討のみ |
 
 ## ライセンス
 
