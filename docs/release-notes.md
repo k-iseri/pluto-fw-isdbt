@@ -1,5 +1,29 @@
 # リリースノート
 
+## v2.0.1（2026-10-15）
+
+v2.0.0 の修正版。配布物は `pluto-fw-isdbt-v2.0.1-nano-8bit.frm` / `.dfu` / `SHA256SUMS.txt`（内容は v2.0.0 と同じ構成）。
+
+### 変更点
+
+- 出力フレームヘッダの窓開始サンプル番号（w2/w3）を本当に 64bit にした。v2.0.0 は下位 32bit だけで 528 秒ごとに一周し、
+  BonDriver v1.3.0 では視聴開始から最長約 9 分で映像が止まっていた（v1.3.1 はホスト側で周回を補正しているので
+  v2.0.0 のままでも動く。v2.0.1 ではファーム側でも直り、他のホストから使う場合も周回を気にしなくてよい）。
+  `fw_version` は `v0.39-isdbt-2.0.1`。FPGA の資源・タイミングは v2.0.0 と同等（WNS +0.74 ns）
+- 必要なホストは v2.0.0 と同じ（BonDriver_PlutoSDR v1.3.0 以降で FPGA 前段、v1.3.1 以降を推奨）
+
+### チェックサム
+
+```
+9d3687ad2063b0d0bc39bb01b862d150a1f7b0372c3fcfe696944db02454dd0e  pluto-fw-isdbt-v2.0.1-nano-8bit.frm
+591ee364547b39b6a944a7183515c7336a17ebf1553c774cd648b04093a60175  pluto-fw-isdbt-v2.0.1-nano-8bit.dfu
+```
+
+### ソース
+
+- このリポジトリ タグ `v2.0.1`
+- plutosdr-fw フォーク タグ `v0.39-isdbt-2.0.1`（hdl `5fe9004`、linux `f885cf9`。v2.0.0 から rtl の fe_win だけが変わった）
+
 ## v2.0.0（2026-10-15）
 
 HamGeek PlutoSDR Nano（XC7Z010-CLG400 + AD9363）向け。GitHub Release の本文はこの節をそのまま使う。
